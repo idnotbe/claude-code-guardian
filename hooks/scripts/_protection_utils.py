@@ -379,10 +379,10 @@ _FALLBACK_PROTECTION = {
                 "pattern": r"(?i)(?:rm|rmdir|del).*_archive(?:\s|/|$)",
                 "reason": "[FALLBACK] Archive deletion",
             },
-            {"pattern": r"git\s+push\s+(?:--force(?!-with-lease)|-f)", "reason": "[FALLBACK] Force push"},
+            {"pattern": r"git\s+push\s[^;|&\n]*(?:--force(?!-with-lease)|-f\b)", "reason": "[FALLBACK] Force push"},
         ],
         "ask": [
-            {"pattern": r"git\s+push\s+--force-with-lease", "reason": "[FALLBACK] Force push with lease"},
+            {"pattern": r"git\s+push\s[^;|&\n]*--force-with-lease", "reason": "[FALLBACK] Force push with lease"},
             {"pattern": r"git\s+reset\s+--hard", "reason": "[FALLBACK] Hard reset"},
         ],
     },

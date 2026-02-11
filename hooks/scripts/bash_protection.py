@@ -128,8 +128,10 @@ def extract_paths(command: str, project_dir: Path) -> list[Path]:
 
     # COMPAT-03 FIX: shlex.split(posix=False) keeps surrounding quotes on Windows.
     # Strip them so Path() receives clean paths.
+    # Also filter empty strings from stripped quotes (e.g., rm "" → Path('') = project dir).
     if sys.platform == "win32":
         parts = [p.strip("'\"") for p in parts]
+        parts = [p for p in parts if p]
 
     if not parts:
         return []
