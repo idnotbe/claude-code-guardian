@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-# PLUGIN MIGRATION: Migrated from ops/.claude/hooks/_protection/
+# PLUGIN MIGRATION: Migrated from ops/.claude/hooks/_protection/ to plugin structure
 # Config/log/circuit paths updated for .claude/guardian/ layout
 
-"""Unit tests for _protection_utils.py
+"""Unit tests for _guardian_utils.py
 
 This test script can run independently without requiring
-the actual protection.json or CLAUDE_PROJECT_DIR to be set.
+the actual config.json or CLAUDE_PROJECT_DIR to be set.
 It creates a temporary test environment automatically.
 
 Run with:
-    python test_protection_utils.py
+    python test_guardian_utils.py
 
 Or with dry-run mode enabled:
     $env:CLAUDE_HOOK_DRY_RUN = "1"
-    python test_protection_utils.py
+    python test_guardian_utils.py
 """
 
 import json
@@ -34,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'hooks' / 'scrip
 
 
 def setup_test_environment():
-    """Create temporary test environment with mock protection.json.
+    """Create temporary test environment with mock config.json.
 
     This allows tests to run without requiring the actual
     project configuration to be in place.
@@ -47,7 +47,7 @@ def setup_test_environment():
     hooks_dir = Path(test_dir) / ".claude" / "guardian"
     hooks_dir.mkdir(parents=True, exist_ok=True)
 
-    # Minimal but functional protection.json for testing
+    # Minimal but functional config.json for testing
     test_config = {
         "hookBehavior": {"onTimeout": "deny", "onError": "deny", "timeoutSeconds": 10},
         "bashToolPatterns": {
@@ -79,6 +79,10 @@ def setup_test_environment():
                 },
                 # Git reflog patterns
                 {"pattern": r"git\s+reflog\s+(?:expire|delete)", "reason": "Reflog destruction"},
+                # Interpreter-mediated deletion (block, not ask)
+                {"pattern": r"(?:py|python[23]?|python\d[\d.]*)\s[^|&\n]*(?:os\.remove|os\.unlink|shutil\.rmtree|os\.rmdir|pathlib\.Path.*\.unlink)", "reason": "Interpreter deletion"},
+                {"pattern": r"(?:node|deno|bun)\s[^|&\n]*(?:unlinkSync|rmSync|rmdirSync|fs\.unlink|fs\.rm\b|promises\.unlink)", "reason": "Interpreter deletion"},
+                {"pattern": r"(?:perl|ruby)\s[^|&\n]*(?:\bunlink\b|File\.delete|FileUtils\.rm)", "reason": "Interpreter deletion"},
             ],
             "ask": [
                 {"pattern": r"rm\s+-[rRf]+", "reason": "Recursive delete"},
@@ -86,11 +90,6 @@ def setup_test_environment():
                 {"pattern": r"git\s+reset\s+--hard", "reason": "Hard reset"},
                 {"pattern": r"git\s+clean\s+-[fd]+", "reason": "Git clean"},
                 {"pattern": r"truncate\s+", "reason": "File truncate"},
-                # ReDoS-safe pattern for Python file deletion
-                {
-                    "pattern": r"python\s.*?(?:os\.remove|os\.unlink|shutil\.rmtree)",
-                    "reason": "Python file deletion",
-                },
                 # SQL patterns
                 {"pattern": r"(?i)delete\s+from\s+\w+(?:\s*;|\s*$|\s+--)", "reason": "SQL DELETE"},
             ],
@@ -106,7 +105,7 @@ def setup_test_environment():
         "noDeletePaths": [".gitignore", "CLAUDE.md", "README.md"],
     }
 
-    config_path = hooks_dir / "protection.json"
+    config_path = hooks_dir / "config.json"
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(test_config, f, indent=2)
 
@@ -167,10 +166,10 @@ def test_config_loading(results: TestResults):
     """Test configuration loading."""
     print("\nTesting configuration loading...")
 
-    from _protection_utils import get_hook_behavior, load_protection_config
+    from _guardian_utils import get_hook_behavior, load_guardian_config
 
     # Test config loads
-    config = load_protection_config()
+    config = load_guardian_config()
     results.record("Config loads successfully", isinstance(config, dict) and len(config) > 0)
 
     # Test hook behavior defaults
@@ -184,7 +183,7 @@ def test_block_patterns(results: TestResults):
     """Test block pattern matching."""
     print("\nTesting block patterns...")
 
-    from _protection_utils import match_block_patterns
+    from _guardian_utils import match_block_patterns
 
     # Should block
     tests_block = [
@@ -231,7 +230,7 @@ def test_ask_patterns(results: TestResults):
     """Test ask pattern matching."""
     print("\nTesting ask patterns...")
 
-    from _protection_utils import match_ask_patterns
+    from _guardian_utils import match_ask_patterns
 
     tests = [
         ("rm -rf temp/", True, "Recursive delete"),
@@ -260,7 +259,7 @@ def test_path_matching(results: TestResults):
     """Test path pattern matching."""
     print("\nTesting path patterns...")
 
-    from _protection_utils import match_no_delete, match_read_only, match_zero_access
+    from _guardian_utils import match_no_delete, match_read_only, match_zero_access
 
     # zeroAccess
     print("  zeroAccessPaths:")
@@ -308,7 +307,7 @@ def test_dry_run(results: TestResults):
     """Test dry-run mode detection."""
     print("\nTesting dry-run mode...")
 
-    from _protection_utils import is_dry_run
+    from _guardian_utils import is_dry_run
 
     # Save original
     original = os.environ.get("CLAUDE_HOOK_DRY_RUN")
@@ -341,11 +340,11 @@ def test_dry_run(results: TestResults):
         del os.environ["CLAUDE_HOOK_DRY_RUN"]
 
 
-def test_evaluate_protection(results: TestResults):
-    """Test protection evaluation orchestration."""
-    print("\nTesting evaluate_protection()...")
+def test_evaluate_rules(results: TestResults):
+    """Test guardian evaluation orchestration."""
+    print("\nTesting evaluate_rules()...")
 
-    from _protection_utils import evaluate_protection
+    from _guardian_utils import evaluate_rules
 
     tests = [
         ("rm -rf /", "deny", "Root deletion blocks"),
@@ -357,7 +356,7 @@ def test_evaluate_protection(results: TestResults):
     ]
 
     for cmd, expected_decision, desc in tests:
-        decision, reason = evaluate_protection(cmd)
+        decision, reason = evaluate_rules(cmd)
         results.record(
             f"Evaluate: {desc}", decision == expected_decision, expected_decision, decision
         )
@@ -367,7 +366,7 @@ def test_response_helpers(results: TestResults):
     """Test response helper functions."""
     print("\nTesting response helpers...")
 
-    from _protection_utils import allow_response, ask_response, deny_response
+    from _guardian_utils import allow_response, ask_response, deny_response
 
     # Test deny response
     deny = deny_response("Test reason")
@@ -399,7 +398,7 @@ def test_logging(results: TestResults):
     """Test logging functionality."""
     print("\nTesting logging...")
 
-    from _protection_utils import log_protection
+    from _guardian_utils import log_guardian
 
     # Get log file path
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
@@ -411,7 +410,7 @@ def test_logging(results: TestResults):
         log_file.unlink()
 
     # Log a test message
-    log_protection("INFO", "Test log message")
+    log_guardian("INFO", "Test log message")
 
     # Check log file exists
     results.record("Log file created", log_file.exists())
@@ -427,7 +426,7 @@ def test_path_normalization(results: TestResults):
     """Test path normalization for Windows compatibility."""
     print("\nTesting path normalization...")
 
-    from _protection_utils import normalize_path, normalize_path_for_matching
+    from _guardian_utils import normalize_path, normalize_path_for_matching
 
     # Test normalize_path
     test_path = "some/path/file.txt"
@@ -446,11 +445,11 @@ def test_error_handling(results: TestResults):
 
     # Test with invalid regex pattern (should not crash)
     # We'll temporarily inject a bad pattern
-    import _protection_utils
-    from _protection_utils import match_block_patterns
+    import _guardian_utils
+    from _guardian_utils import match_block_patterns
 
-    original_cache = _protection_utils._config_cache
-    _protection_utils._config_cache = {
+    original_cache = _guardian_utils._config_cache
+    _guardian_utils._config_cache = {
         "bashToolPatterns": {
             "block": [
                 {"pattern": "[invalid regex", "reason": "Bad pattern"}  # Invalid regex
@@ -467,14 +466,14 @@ def test_error_handling(results: TestResults):
         results.record("Invalid regex doesn't crash", False, "No exception", str(e))
 
     # Restore cache
-    _protection_utils._config_cache = original_cache
+    _guardian_utils._config_cache = original_cache
 
 
 def test_symlink_functions(results: TestResults):
     """Test symlink security functions."""
     print("\nTesting symlink security functions...")
 
-    from _protection_utils import is_path_within_project, is_symlink_escape
+    from _guardian_utils import is_path_within_project, is_symlink_escape
 
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
 
@@ -496,7 +495,7 @@ def test_symlink_functions(results: TestResults):
     )
 
     # Test is_symlink_escape with non-symlink (should return False)
-    regular_file = os.path.join(project_dir, ".claude", "hooks", "protection.json")
+    regular_file = os.path.join(project_dir, ".claude", "guardian", "config.json")
     results.record(
         "Regular file is not symlink escape",
         not is_symlink_escape(regular_file),
@@ -510,15 +509,15 @@ def test_symlink_functions(results: TestResults):
     )
 
 
-def test_fallback_protection(results: TestResults):
-    """Test fallback protection when config is missing."""
-    print("\nTesting fallback protection...")
+def test_fallback_guardian(results: TestResults):
+    """Test fallback guardian when config is missing."""
+    print("\nTesting fallback guardian...")
 
-    import _protection_utils
+    import _guardian_utils
 
     # Save original cache and clear it
-    original_cache = _protection_utils._config_cache
-    _protection_utils._config_cache = None
+    original_cache = _guardian_utils._config_cache
+    _guardian_utils._config_cache = None
 
     # Save original env
     original_env = os.environ.get("CLAUDE_PROJECT_DIR")
@@ -527,9 +526,9 @@ def test_fallback_protection(results: TestResults):
         # Test with no project dir - should use fallback
         if "CLAUDE_PROJECT_DIR" in os.environ:
             del os.environ["CLAUDE_PROJECT_DIR"]
-        _protection_utils._config_cache = None
+        _guardian_utils._config_cache = None
 
-        config = _protection_utils.load_protection_config()
+        config = _guardian_utils.load_guardian_config()
 
         # Check fallback has critical patterns
         results.record(
@@ -546,9 +545,9 @@ def test_fallback_protection(results: TestResults):
         )
 
         # Test that fallback blocks critical operations
-        from _protection_utils import match_block_patterns
+        from _guardian_utils import match_block_patterns
 
-        _protection_utils._config_cache = None  # Clear again
+        _guardian_utils._config_cache = None  # Clear again
         matched, reason = match_block_patterns("rm -rf .git")
         results.record(
             "Fallback blocks .git deletion",
@@ -559,14 +558,14 @@ def test_fallback_protection(results: TestResults):
         # Restore environment
         if original_env:
             os.environ["CLAUDE_PROJECT_DIR"] = original_env
-        _protection_utils._config_cache = original_cache
+        _guardian_utils._config_cache = original_cache
 
 
 def test_command_length_limit(results: TestResults):
     """Test command length limit for DoS prevention."""
     print("\nTesting command length limit...")
 
-    from _protection_utils import MAX_COMMAND_LENGTH, match_ask_patterns, match_block_patterns
+    from _guardian_utils import MAX_COMMAND_LENGTH, match_ask_patterns, match_block_patterns
 
     # Test with normal command
     normal_cmd = "rm -rf /"
@@ -597,7 +596,7 @@ def test_redos_patterns(results: TestResults):
 
     import time
 
-    from _protection_utils import match_ask_patterns, match_block_patterns
+    from _guardian_utils import match_ask_patterns, match_block_patterns
 
     # Test curl pattern with crafted input (should be fast)
     start = time.time()
@@ -617,14 +616,14 @@ def test_redos_patterns(results: TestResults):
         f"{elapsed:.2f} sec",
     )
 
-    # Test python pattern
+    # Test python pattern (now in block, not ask)
     start = time.time()
     test_cmd = "python -c 'os.remove(\"file\")'"
-    matched, reason = match_ask_patterns(test_cmd)
+    matched, reason = match_block_patterns(test_cmd)
     elapsed = time.time() - start
 
     results.record(
-        "Python pattern matches correctly",
+        "Python pattern matches correctly (block)",
         matched,
     )
     results.record(
@@ -637,9 +636,9 @@ def test_redos_patterns(results: TestResults):
 
 def test_newline_injection(results: TestResults):
     """Test that newline injection attacks are blocked (DOTALL flag fix)."""
-    print("\nTesting newline injection protection...")
+    print("\nTesting newline injection guardian...")
 
-    from _protection_utils import match_block_patterns
+    from _guardian_utils import match_block_patterns
 
     # These patterns should be blocked even with newlines inserted
     # The DOTALL flag ensures '.' matches newlines
@@ -672,7 +671,7 @@ def test_extended_command_length(results: TestResults):
     """Test command length handling with larger payloads (10k+)."""
     print("\nTesting extended command length (10k+)...")
 
-    from _protection_utils import MAX_COMMAND_LENGTH, match_ask_patterns, match_block_patterns
+    from _guardian_utils import MAX_COMMAND_LENGTH, match_ask_patterns, match_block_patterns
 
     # Test with 10k command (should work)
     cmd_10k = "echo " + "A" * 10000
@@ -700,30 +699,50 @@ def test_extended_command_length(results: TestResults):
 
 
 def test_updated_python_pattern(results: TestResults):
-    """Test the updated Python pattern (ReDoS-safe)."""
-    print("\nTesting updated Python pattern...")
+    """Test interpreter deletion patterns (now block, not ask)."""
+    print("\nTesting interpreter deletion patterns (block)...")
 
     import time
 
-    from _protection_utils import match_ask_patterns
+    from _guardian_utils import match_block_patterns
 
-    # Test that pattern still matches correctly
-    tests = [
-        ("python -c 'os.remove(\"file\")'", True, "Basic os.remove"),
-        ("python script.py os.unlink", True, "os.unlink in args"),
-        ("python -m shutil.rmtree", True, "shutil.rmtree"),
-        ("python script.py", False, "Normal python"),
-        ("python3 -c 'print(1)'", False, "Safe python3"),
+    # Python patterns (block)
+    python_tests = [
+        ("python -c 'os.remove(\"file\")'", True, "Python: os.remove"),
+        ("python3 -c 'import os; os.remove(\"f\")'", True, "Python3: semicolon + os.remove"),
+        ("python script.py os.unlink", True, "Python: os.unlink in args"),
+        ("python -m shutil.rmtree", True, "Python: shutil.rmtree"),
+        ("python3 -c 'import pathlib; pathlib.Path(\"f\").unlink()'", True, "Python3: pathlib.Path.unlink"),
+        ("py -c 'os.remove(\"f\")'", True, "py launcher: os.remove"),
+        ("python script.py", False, "Python: normal (no deletion)"),
+        ("python3 -c 'print(1)'", False, "Python3: safe command"),
     ]
 
-    for cmd, expected, desc in tests:
-        matched, reason = match_ask_patterns(cmd)
-        results.record(f"Python pattern: {desc}", matched == expected, expected, matched)
+    # Node.js patterns (block)
+    node_tests = [
+        ("node -e \"fs.unlinkSync('f')\"", True, "Node: unlinkSync"),
+        ("node -e \"fs.rmSync('f')\"", True, "Node: rmSync"),
+        ("node -e \"fs.promises.unlink('f')\"", True, "Node: promises.unlink"),
+        ("bun -e \"fs.unlinkSync('f')\"", True, "Bun: unlinkSync"),
+        ("node -e \"console.log(1)\"", False, "Node: safe command"),
+    ]
+
+    # Perl/Ruby patterns (block)
+    perlruby_tests = [
+        ("perl -e \"unlink 'file'\"", True, "Perl: unlink"),
+        ("ruby -e \"File.delete('f')\"", True, "Ruby: File.delete"),
+        ("ruby -e \"FileUtils.rm('f')\"", True, "Ruby: FileUtils.rm"),
+        ("perl -e \"print 1\"", False, "Perl: safe command"),
+    ]
+
+    for cmd, expected, desc in python_tests + node_tests + perlruby_tests:
+        matched, reason = match_block_patterns(cmd)
+        results.record(f"Interpreter block: {desc}", matched == expected, expected, matched)
 
     # Performance test with long command
     start = time.time()
     long_cmd = "python " + "A" * 5000 + " os.remove"
-    matched, reason = match_ask_patterns(long_cmd)
+    matched, reason = match_block_patterns(long_cmd)
     elapsed = time.time() - start
 
     results.record(
@@ -742,7 +761,7 @@ def test_updated_python_pattern(results: TestResults):
 
 def main():
     print("=" * 60)
-    print("Protection Utils Unit Tests")
+    print("Guardian Utils Unit Tests")
     print("=" * 60)
 
     # Setup test environment
@@ -750,9 +769,9 @@ def main():
     print(f"Test environment: {test_dir}")
 
     # Clear module cache to use our test config
-    import _protection_utils
+    import _guardian_utils
 
-    _protection_utils._config_cache = None
+    _guardian_utils._config_cache = None
 
     results = TestResults()
 
@@ -762,13 +781,13 @@ def main():
         test_ask_patterns(results)
         test_path_matching(results)
         test_dry_run(results)
-        test_evaluate_protection(results)
+        test_evaluate_rules(results)
         test_response_helpers(results)
         test_logging(results)
         test_path_normalization(results)
         test_error_handling(results)
         test_symlink_functions(results)
-        test_fallback_protection(results)
+        test_fallback_guardian(results)
         test_command_length_limit(results)
         test_redos_patterns(results)
         test_newline_injection(results)

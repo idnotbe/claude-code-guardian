@@ -1,17 +1,13 @@
 #!/usr/bin/env python3
-# PLUGIN MIGRATION: Migrated from ops/.claude/hooks/ to plugin structure
-# Import paths unchanged - scripts are colocated in hooks/scripts/
+"""Read Guardian Hook.
 
-"""Write Guardian Hook.
-
-Protects files from unauthorized overwriting by:
+Protects files from unauthorized reading by:
 1. Blocking zeroAccess paths (secrets, credentials)
-2. Blocking readOnly paths (dependencies, generated files)
-3. Blocking symlink escapes (security)
-4. Blocking paths outside project (security)
-5. Blocking self-guarded paths (guardian system files)
+2. Blocking symlink escapes (security)
+3. Blocking paths outside project (security)
+4. Blocking self-guarded paths (guardian system files)
 
-Phase: 3 (Edit/Write Guardian)
+Note: Does NOT block readOnly paths — reading read-only files is allowed.
 
 Design Principles:
 - Fail-Close: If guardian system fails, deny the operation
@@ -50,7 +46,7 @@ except ImportError as e:
 
 def main() -> None:
     """Main hook entry point."""
-    run_path_guardian_hook("Write")
+    run_path_guardian_hook("Read")
 
 
 if __name__ == "__main__":
@@ -58,9 +54,9 @@ if __name__ == "__main__":
         main()
     except Exception as e:
         # Fail-close: on unexpected errors, deny for safety
-        log_guardian("ERROR", f"Write guardian error: {type(e).__name__}: {e}")
+        log_guardian("ERROR", f"Read guardian error: {type(e).__name__}: {e}")
         # Set circuit open to prevent auto-commit of potentially corrupted state
-        set_circuit_open(f"write_guardian crashed: {type(e).__name__}")
+        set_circuit_open(f"read_guardian crashed: {type(e).__name__}")
         print(
             json.dumps(
                 {

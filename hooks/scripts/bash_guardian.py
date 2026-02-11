@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-# PLUGIN MIGRATION: Migrated from ops/.claude/hooks/_protection/
+# PLUGIN MIGRATION: Migrated from ops/.claude/hooks/ to plugin structure
 # Import paths unchanged - scripts are colocated in hooks/scripts/
 
-"""Bash Protection Hook - Full Implementation.
+"""Bash Guardian Hook - Full Implementation.
 
 Protects against dangerous bash commands by:
 1. Blocking catastrophic patterns (rm -rf /, .git deletion, etc.)
@@ -10,7 +10,7 @@ Protects against dangerous bash commands by:
 3. Protecting paths based on zeroAccess/readOnly/noDelete rules
 4. Archiving untracked files before deletion
 
-Phase: 2 (Full Bash Protection)
+Phase: 2 (Full Bash Guardian)
 """
 
 import glob
@@ -27,7 +27,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 try:
-    from _protection_utils import (
+    from _guardian_utils import (
         COMMIT_MESSAGE_MAX_LENGTH,  # Import constant for message length
         ask_response,
         deny_response,
@@ -40,8 +40,8 @@ try:
         is_dry_run,
         is_rebase_or_merge_in_progress,  # Phase 5: Fragile state check
         is_symlink_escape,
-        load_protection_config,
-        log_protection,
+        load_guardian_config,
+        log_guardian,
         match_ask_patterns,
         match_block_patterns,
         match_no_delete,
@@ -52,14 +52,14 @@ try:
         validate_commit_prefix,  # m3 FIX: centralized prefix validation
     )
 except ImportError as e:
-    # Fail-close: protection system unavailable = block all
+    # Fail-close: guardian system unavailable = block all
     print(
         json.dumps(
             {
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
                     "permissionDecision": "deny",
-                    "permissionDecisionReason": f"Protection system unavailable: {e}",
+                    "permissionDecisionReason": f"Guardian system unavailable: {e}",
                 }
             }
         )
@@ -75,6 +75,9 @@ except ImportError as e:
 def is_delete_command(command: str) -> bool:
     """Check if command is a delete operation.
 
+    Detects both shell delete commands (rm, del) and interpreter-mediated
+    deletions (python os.remove, node fs.unlinkSync, etc.).
+
     Args:
         command: The bash command to check.
 
@@ -82,11 +85,17 @@ def is_delete_command(command: str) -> bool:
         True if command appears to be a delete operation.
     """
     delete_patterns = [
+        # Shell delete commands
         r"(?:^|[;&|]\s*)rm\s+",
         r"(?:^|[;&|]\s*)del\s+",
         r"(?:^|[;&|]\s*)rmdir\s+",
         r"(?:^|[;&|]\s*)Remove-Item\s+",
         r"(?:^|[;&|]\s*)ri\s+",
+        # Interpreter-mediated deletions (python/node/perl/ruby)
+        # Note: [^|&\n]* instead of [^;|&\n]* because ; is valid syntax inside interpreter one-liners
+        r"(?:py|python[23]?|python\d[\d.]*)\s[^|&\n]*(?:os\.remove|os\.unlink|shutil\.rmtree|os\.rmdir|pathlib\.Path.*\.unlink)",
+        r"(?:node|deno|bun)\s[^|&\n]*(?:unlinkSync|rmSync|rmdirSync|fs\.unlink|fs\.rm\b|promises\.unlink)",
+        r"(?:perl|ruby)\s[^|&\n]*(?:\bunlink\b|File\.delete|FileUtils\.rm)",
     ]
     return any(re.search(p, command, re.IGNORECASE) for p in delete_patterns)
 
@@ -123,7 +132,7 @@ def extract_paths(command: str, project_dir: Path) -> list[Path]:
         parts = shlex.split(command, posix=(sys.platform != "win32"))
     except ValueError as e:
         # FIX: Log shlex parsing failure for debugging
-        log_protection("DEBUG", f"shlex.split failed ({e}), falling back to simple split")
+        log_guardian("DEBUG", f"shlex.split failed ({e}), falling back to simple split")
         parts = command.split()
 
     # COMPAT-03 FIX: shlex.split(posix=False) keeps surrounding quotes on Windows.
@@ -241,7 +250,7 @@ def archive_files(
     for file_path in files:
         # Check file count limit
         if len(archived) >= ARCHIVE_MAX_FILES:
-            log_protection(
+            log_guardian(
                 "WARN", f"Archive file limit reached ({ARCHIVE_MAX_FILES}), skipping rest"
             )
             skipped_count += len(files) - len(archived)
@@ -260,7 +269,7 @@ def archive_files(
             # Skip large files
             if file_size_mb > ARCHIVE_MAX_FILE_SIZE_MB:
                 max_mb = ARCHIVE_MAX_FILE_SIZE_MB
-                log_protection(
+                log_guardian(
                     "WARN",
                     f"Skipping large file {file_path.name} ({file_size_mb:.1f}MB > {max_mb}MB)",
                 )
@@ -270,7 +279,7 @@ def archive_files(
             # Check total size limit
             if (total_size + file_size) / (1024 * 1024) > ARCHIVE_MAX_TOTAL_SIZE_MB:
                 limit_mb = ARCHIVE_MAX_TOTAL_SIZE_MB
-                log_protection(
+                log_guardian(
                     "WARN",
                     f"Archive total size limit reached ({limit_mb}MB), skipping rest",
                 )
@@ -298,7 +307,7 @@ def archive_files(
 
         except PermissionError as e:
             # M3 FIX: Categorize archive failures
-            log_protection(
+            log_guardian(
                 "WARN",
                 f"Archive PERMISSION DENIED for {file_path.name}: {e}\n"
                 "  Check file permissions or run with elevated privileges.",
@@ -309,14 +318,14 @@ def archive_files(
             # COMPAT-11 FIX: errno 28 (ENOSPC) is Linux; Windows uses winerror 112
             is_disk_full = e.errno == 28 or getattr(e, "winerror", None) == 112
             error_type = "DISK FULL" if is_disk_full else "FILESYSTEM ERROR"
-            log_protection(
+            log_guardian(
                 "WARN",
                 f"Archive {error_type} for {file_path.name}: {e}\n  errno={e.errno}",
             )
             skipped_count += 1
         except Exception as e:
             # M3 FIX: Unexpected errors with type info
-            log_protection(
+            log_guardian(
                 "WARN",
                 f"Archive UNEXPECTED ERROR for {file_path.name}: {type(e).__name__}: {e}",
             )
@@ -324,10 +333,10 @@ def archive_files(
 
     elapsed = (datetime.now() - start_time).total_seconds()
     if elapsed > 5:
-        log_protection("INFO", f"Archive completed in {elapsed:.1f}s ({len(archived)} files)")
+        log_guardian("INFO", f"Archive completed in {elapsed:.1f}s ({len(archived)} files)")
 
     if skipped_count > 0:
-        log_protection("WARN", f"Skipped {skipped_count} file(s) during archive")
+        log_guardian("WARN", f"Skipped {skipped_count} file(s) during archive")
 
     return archive_dir, archived
 
@@ -402,7 +411,7 @@ def main() -> None:
     try:
         input_data = json.load(sys.stdin)
     except json.JSONDecodeError as e:
-        log_protection("ERROR", f"Malformed JSON input: {e}")
+        log_guardian("ERROR", f"Malformed JSON input: {e}")
         print(json.dumps(deny_response("Invalid hook input (malformed JSON)")))
         sys.exit(0)
 
@@ -418,9 +427,9 @@ def main() -> None:
     # ========== Step 1: Block Patterns ==========
     blocked, reason = match_block_patterns(command)
     if blocked:
-        log_protection("BLOCK", f"{reason}: {cmd_preview}")
+        log_guardian("BLOCK", f"{reason}: {cmd_preview}")
         if is_dry_run():
-            log_protection("DRY-RUN", "Would DENY")
+            log_guardian("DRY-RUN", "Would DENY")
             sys.exit(0)
         print(json.dumps(deny_response(reason)))
         sys.exit(0)
@@ -436,36 +445,36 @@ def main() -> None:
 
         # Symlink escape check (prevent symlinks pointing outside project)
         if is_symlink_escape(path_str):
-            log_protection("BLOCK", f"Symlink escape detected: {path.name}")
+            log_guardian("BLOCK", f"Symlink escape detected: {path.name}")
             if is_dry_run():
-                log_protection("DRY-RUN", "Would DENY")
+                log_guardian("DRY-RUN", "Would DENY")
                 sys.exit(0)
             print(json.dumps(deny_response(f"Symlink points outside project: {path.name}")))
             sys.exit(0)
 
         # Zero access check
         if match_zero_access(path_str):
-            log_protection("BLOCK", f"Zero access path: {path.name}")
+            log_guardian("BLOCK", f"Zero access path: {path.name}")
             if is_dry_run():
-                log_protection("DRY-RUN", "Would DENY")
+                log_guardian("DRY-RUN", "Would DENY")
                 sys.exit(0)
             print(json.dumps(deny_response(f"Protected path: {path.name}")))
             sys.exit(0)
 
         # Read-only check (for write commands)
         if is_write_command(command) and match_read_only(path_str):
-            log_protection("BLOCK", f"Read-only path: {path.name}")
+            log_guardian("BLOCK", f"Read-only path: {path.name}")
             if is_dry_run():
-                log_protection("DRY-RUN", "Would DENY")
+                log_guardian("DRY-RUN", "Would DENY")
                 sys.exit(0)
             print(json.dumps(deny_response(f"Read-only path: {path.name}")))
             sys.exit(0)
 
         # No-delete check (for delete commands)
         if is_delete_command(command) and match_no_delete(path_str):
-            log_protection("BLOCK", f"No-delete path: {path.name}")
+            log_guardian("BLOCK", f"No-delete path: {path.name}")
             if is_dry_run():
-                log_protection("DRY-RUN", "Would DENY")
+                log_guardian("DRY-RUN", "Would DENY")
                 sys.exit(0)
             print(json.dumps(deny_response(f"Protected from deletion: {path.name}")))
             sys.exit(0)
@@ -476,26 +485,26 @@ def main() -> None:
             # FIX: Log when deletion detected but no paths extracted
             # This helps diagnose path extraction issues
             cmd_short = truncate_command(command, 80)
-            log_protection("DEBUG", f"Delete cmd, no paths extracted: {cmd_short}")
+            log_guardian("DEBUG", f"Delete cmd, no paths extracted: {cmd_short}")
         else:
             # Archive untracked files
             untracked = [p for p in paths if not git_is_tracked(str(p))]
 
             # FIX: Log when all files are git-tracked (no archive needed)
             if not untracked and paths:
-                log_protection(
+                log_guardian(
                     "DEBUG",
                     f"All {len(paths)} path(s) are git-tracked, no archive needed",
                 )
 
             if untracked:
                 if is_dry_run():
-                    log_protection("DRY-RUN", f"Would archive: {[p.name for p in untracked]}")
+                    log_guardian("DRY-RUN", f"Would archive: {[p.name for p in untracked]}")
                 else:
                     archive_dir, archived = archive_files(untracked, project_dir)
                     if archived:
                         create_deletion_log(archive_dir, archived, command)
-                        log_protection(
+                        log_guardian(
                             "ARCHIVE", f"Archived {len(archived)} file(s) to {archive_dir.name}"
                         )
 
@@ -516,7 +525,7 @@ def main() -> None:
                         sys.exit(0)
                     else:
                         # Archive failed - warn user explicitly
-                        log_protection(
+                        log_guardian(
                             "WARN", f"Archive FAILED for {len(untracked)} untracked file(s)"
                         )
                         file_list = ", ".join(p.name for p in untracked[:3])
@@ -537,9 +546,9 @@ def main() -> None:
 
             # Tracked files only - just ask
             if paths:
-                log_protection("ASK", f"Delete files: {[p.name for p in paths[:3]]}")
+                log_guardian("ASK", f"Delete files: {[p.name for p in paths[:3]]}")
                 if is_dry_run():
-                    log_protection("DRY-RUN", "Would ASK")
+                    log_guardian("DRY-RUN", "Would ASK")
                     sys.exit(0)
                 file_list = ", ".join(p.name for p in paths[:3])
                 if len(paths) > 3:
@@ -551,13 +560,13 @@ def main() -> None:
     if needs_ask:
         # Try pre-commit before dangerous operation
         try:
-            git_config = load_protection_config().get("gitIntegration", {})
+            git_config = load_guardian_config().get("gitIntegration", {})
             pre_commit_config = git_config.get("preCommitOnDangerous", {})
 
             if pre_commit_config.get("enabled", False):
                 # Phase 5: Check for fragile git state (merge/rebase in progress)
                 if is_rebase_or_merge_in_progress():
-                    log_protection(
+                    log_guardian(
                         "WARN",
                         "Rebase/merge in progress - skipping pre-commit (would corrupt git state)",
                     )
@@ -576,10 +585,10 @@ def main() -> None:
 
                     # MINOR-2 FIX: Log in dry-run mode instead of skipping silently
                     if is_dry_run():
-                        log_protection("DRY-RUN", f"Would pre-commit: {commit_msg[:60]}...")
+                        log_guardian("DRY-RUN", f"Would pre-commit: {commit_msg[:60]}...")
                     else:
                         # MINOR-3 DOCUMENTATION: Stage Failure Handling Strategy
-                        # bash_protection.py: Skips commit if staging fails
+                        # bash_guardian.py: Skips commit if staging fails
                         #   Reason: pre-commit should only include what we just staged
                         # auto_commit.py: Continues to commit even if staging fails
                         #   Reason: There may be already staged changes that should be preserved
@@ -592,30 +601,30 @@ def main() -> None:
                                 # Pre-danger-checkpoint is for backup, not code verification
                                 # This prevents circuit breaker from triggering on linter failures
                                 if git_commit(commit_msg, no_verify=True):
-                                    log_protection(
+                                    log_guardian(
                                         "INFO", f"Pre-commit created before: {cmd_preview}"
                                     )
                                 else:
-                                    log_protection("WARN", "Pre-commit failed: commit unsuccessful")
+                                    log_guardian("WARN", "Pre-commit failed: commit unsuccessful")
                                     # P2-2 FIX: Open circuit on pre-commit failure for consistency
                                     set_circuit_open("pre-commit failed during dangerous operation")
                             else:
                                 # No staged changes after git add - this is normal when
                                 # only untracked files exist. Skip commit silently.
-                                log_protection(
+                                log_guardian(
                                     "INFO",
                                     "No staged changes - skipping pre-commit (untracked only)",
                                 )
                         else:
-                            log_protection("WARN", "Pre-commit failed: unable to stage changes")
+                            log_guardian("WARN", "Pre-commit failed: unable to stage changes")
                             # P2-2 FIX: Open circuit on staging failure
                             set_circuit_open("pre-commit staging failed during dangerous operation")
         except Exception as e:
-            log_protection("WARN", f"Pre-commit failed: {e}")
+            log_guardian("WARN", f"Pre-commit failed: {e}")
 
-        log_protection("ASK", f"{ask_reason}: {cmd_preview}")
+        log_guardian("ASK", f"{ask_reason}: {cmd_preview}")
         if is_dry_run():
-            log_protection("DRY-RUN", "Would ASK")
+            log_guardian("DRY-RUN", "Would ASK")
             sys.exit(0)
         print(json.dumps(ask_response(ask_reason)))
         sys.exit(0)
@@ -623,7 +632,7 @@ def main() -> None:
     # ========== Step 6: Allow ==========
     # Only log non-trivial commands (reduce verbosity per Phase 1B feedback)
     if len(command) > 10 and not command.startswith(("ls", "cd", "pwd", "echo", "cat", "type")):
-        log_protection("ALLOW", cmd_preview)
+        log_guardian("ALLOW", cmd_preview)
     sys.exit(0)
 
 
@@ -631,12 +640,12 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        log_protection("ERROR", f"Unhandled exception: {e}")
+        log_guardian("ERROR", f"Unhandled exception: {e}")
         # Set circuit open to prevent auto-commit of potentially corrupted state
-        set_circuit_open(f"bash_protection crashed: {type(e).__name__}")
+        set_circuit_open(f"bash_guardian crashed: {type(e).__name__}")
         # F-01 FIX: Fail-CLOSE on unhandled exception (security hook must deny on crash)
         try:
-            print(json.dumps(deny_response(f"Protection system error: {type(e).__name__}")))
+            print(json.dumps(deny_response(f"Guardian system error: {type(e).__name__}")))
         except Exception:
             pass  # If even deny_response fails, exit silently (Claude Code treats no output as allow)
         sys.exit(0)

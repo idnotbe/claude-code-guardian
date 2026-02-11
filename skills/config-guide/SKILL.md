@@ -1,11 +1,11 @@
 ---
 name: Guardian Config Guide
-description: Helps users understand and modify their Guardian protection configuration through natural language
+description: Helps users understand and modify their Guardian security configuration through natural language
 ---
 
 # Guardian Configuration Guide
 
-This skill manages the Guardian `protection.json` security configuration. It translates natural language requests into precise JSON modifications, validates changes against the schema, and warns about security implications.
+This skill manages the Guardian `config.json` security configuration. It translates natural language requests into precise JSON modifications, validates changes against the schema, and warns about security implications.
 
 ## When This Skill Applies
 
@@ -20,12 +20,12 @@ This skill activates when the user wants to:
 ## Config Location
 
 Find the user's config by checking these paths in order:
-1. `$CLAUDE_PROJECT_DIR/.claude/guardian/protection.json` (project-specific config)
-2. `${CLAUDE_PLUGIN_ROOT}/assets/protection.default.json` (plugin default fallback)
+1. `$CLAUDE_PROJECT_DIR/.claude/guardian/config.json` (project-specific config)
+2. `${CLAUDE_PLUGIN_ROOT}/assets/guardian.default.json` (plugin default fallback)
 
-If neither exists, a hardcoded minimal protection fallback is active.
+If neither exists, a hardcoded minimal guardian fallback is active.
 
-The JSON schema is at `${CLAUDE_PLUGIN_ROOT}/assets/protection.schema.json`.
+The JSON schema is at `${CLAUDE_PLUGIN_ROOT}/assets/guardian.schema.json`.
 
 ## Core Operations
 
@@ -48,12 +48,12 @@ When the user says things like "block npm publish" or "prevent force push":
 
 When the user says things like "protect .env.production" or "make migrations read-only":
 
-1. Determine the protection level from context:
+1. Determine the guarding level from context:
    - **Zero access** -- secrets, credentials, keys (cannot read or write)
    - **Read only** -- lock files, build output, vendor dirs (can read, cannot write)
    - **No delete** -- critical configs, CI files, migrations (can read and write, cannot delete)
 2. Add the glob pattern to the correct array
-3. Warn if removing protection from a sensitive path
+3. Warn if removing guarding from a sensitive path
 
 **Common path patterns:**
 - Single file: `config/secrets.yaml`
@@ -96,17 +96,17 @@ When the user says "why was X blocked" or "guardian blocked my command":
 
 1. Read the config
 2. Check `bashToolPatterns.block` and `bashToolPatterns.ask` for matching patterns
-3. Check path protection arrays if it was a file operation
+3. Check path guarding arrays if it was a file operation
 4. Explain which rule matched and why it exists
 5. Offer to modify the rule if the user needs it changed
 
 ## Safety Rules
 
-- **Never remove all entries** from `zeroAccessPaths` -- there must always be secret protection
-- **Warn before weakening protection** -- explain what becomes possible when a rule is removed
+- **Never remove all entries** from `zeroAccessPaths` -- there must always be secret guarding
+- **Warn before weakening rules** -- explain what becomes possible when a rule is removed
 - **Suggest `ask` before `remove`** -- if a user wants to unblock something dangerous, suggest moving from `block` to `ask` first
 - **Validate all regex patterns** -- ensure they compile and do not have obvious false-positive issues
-- **Validate against schema** after every modification using the schema at `${CLAUDE_PLUGIN_ROOT}/assets/protection.schema.json`
+- **Validate against schema** after every modification using the schema at `${CLAUDE_PLUGIN_ROOT}/assets/guardian.schema.json`
 - **Preserve existing rules** -- when adding new patterns, append to arrays, do not replace them
 
 ## Writing Regex Patterns

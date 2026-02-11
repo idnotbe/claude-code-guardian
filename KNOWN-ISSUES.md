@@ -53,28 +53,28 @@ These 5 assumptions must be verified in a real Claude Code environment before pu
 - **Recommendation**: Verify against real Claude Code plugin CLI docs; lead with manual install
 
 #### ~~COMPAT-03: shlex.split quote handling on Windows~~ FIXED
-- **File**: hooks/scripts/bash_protection.py
+- **File**: hooks/scripts/bash_guardian.py
 - **Issue**: shlex.split(posix=False) did not strip surrounding quotes from tokens on Windows
 - **Fix**: Added quote stripping after shlex.split on Windows (v1.0.1)
 
 #### COMPAT-04: LC_ALL=C on non-MSYS2 Windows git
-- **File**: hooks/scripts/_protection_utils.py (lines 1452-1465)
+- **File**: hooks/scripts/_guardian_utils.py (lines 1452-1465)
 - **Issue**: LC_ALL=C forces English git output; non-MSYS2 git may not respect it
 - **Status**: Accepted risk. Git for Windows (dominant distribution) works correctly
 
 #### COMPAT-05: Thread-based timeout non-killable on Windows
-- **File**: hooks/scripts/_protection_utils.py (lines 135-155)
+- **File**: hooks/scripts/_guardian_utils.py (lines 135-155)
 - **Issue**: Windows with_timeout uses threading which cannot forcibly kill the target function
 - **Status**: Accepted. Hook processes are short-lived; timeout still prevents blocking
 
 #### COMPAT-06: normalize_path resolves against CWD
-- **File**: hooks/scripts/_protection_utils.py (lines 881-895)
+- **File**: hooks/scripts/_guardian_utils.py (lines 881-895)
 - **Issue**: normalize_path() uses os.path.abspath() resolving against CWD, not project dir
 - **Impact**: Latent bug -- not triggered since tool inputs arrive as absolute paths
 - **Fix**: Align with normalize_path_for_matching() or document as absolute-path-only
 
 #### COMPAT-07: fnmatch case sensitivity on macOS
-- **File**: hooks/scripts/_protection_utils.py (lines 1055, 1087)
+- **File**: hooks/scripts/_guardian_utils.py (lines 1055, 1087)
 - **Issue**: Code lowercases paths only on Windows; macOS HFS+ is also case-insensitive
 - **Fix**: Consider sys.platform != 'linux' for lowercasing check
 
@@ -115,7 +115,7 @@ These 5 assumptions must be verified in a real Claude Code environment before pu
 
 | ID | Severity | Description | Fixed In |
 |----|----------|-------------|----------|
-| F-01 | CRITICAL | bash_protection.py fail-open on crash | Round 1 |
+| F-01 | CRITICAL | bash_guardian.py fail-open on crash | Round 1 |
 | F-02 | HIGH | Oversized command bypass (padding attack) | Round 1 |
 | CRITICAL-01 | CRITICAL | README documented non-existent config step | Round 1 |
 | HIGH-01 | HIGH | marketplace.json wrong $schema key | Round 1 |

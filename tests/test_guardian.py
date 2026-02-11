@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-# PLUGIN MIGRATION: Migrated from ops/.claude/hooks/_protection/
+# PLUGIN MIGRATION: Migrated from ops/.claude/hooks/_protection/ to plugin structure
 # Config/log/circuit paths updated for .claude/guardian/ layout
 
-"""Protection System Integration Tests (Phase 5).
+"""Guardian System Integration Tests (Phase 5).
 
-Run this script to verify all protection features work correctly.
+Run this script to verify all guardian features work correctly.
 
 Usage:
-    python tests/test_protection.py
+    python tests/test_guardian.py
 
 Tests cover:
 - Configuration loading and validation
 - Block patterns (catastrophic commands)
 - Ask patterns (dangerous commands)
-- Path protection (zeroAccess, readOnly, noDelete)
+- Path guardian rules (zeroAccess, readOnly, noDelete)
 - Git integration (fragile state detection)
 - Windows compatibility
 - Timeout handling
@@ -83,13 +83,13 @@ class TestResults:
 
 
 def setup_test_environment():
-    """Create temporary test environment with mock protection.json."""
-    test_dir = tempfile.mkdtemp(prefix="protection_integ_test_")
+    """Create temporary test environment with mock config.json."""
+    test_dir = tempfile.mkdtemp(prefix="guardian_integ_test_")
     # PLUGIN MIGRATION: Updated config location
     hooks_dir = Path(test_dir) / ".claude" / "guardian"
     hooks_dir.mkdir(parents=True, exist_ok=True)
 
-    # Create a test protection.json
+    # Create a test config.json
     test_config = {
         "hookBehavior": {"onTimeout": "deny", "onError": "deny", "timeoutSeconds": 10},
         "bashToolPatterns": {
@@ -118,7 +118,7 @@ def setup_test_environment():
         },
     }
 
-    config_path = hooks_dir / "protection.json"
+    config_path = hooks_dir / "config.json"
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(test_config, f, indent=2)
 
@@ -149,14 +149,14 @@ def test_config_loading(results: TestResults):
     """Test configuration loading and validation."""
     results.set_section("Configuration Loading")
 
-    from _protection_utils import load_protection_config, validate_protection_config
+    from _guardian_utils import load_guardian_config, validate_guardian_config
 
     # Test config loads
-    config = load_protection_config()
+    config = load_guardian_config()
     results.record("Config loads successfully", isinstance(config, dict) and len(config) > 0)
 
     # Test validation passes for good config
-    errors = validate_protection_config(config)
+    errors = validate_guardian_config(config)
     results.record("Config validation passes", len(errors) == 0, [], errors)
 
 
@@ -164,11 +164,11 @@ def test_config_validation(results: TestResults):
     """Test configuration validation catches errors."""
     results.set_section("Configuration Validation")
 
-    from _protection_utils import validate_protection_config
+    from _guardian_utils import validate_guardian_config
 
     # Test with missing required section
     bad_config = {"hookBehavior": {}}
-    errors = validate_protection_config(bad_config)
+    errors = validate_guardian_config(bad_config)
     results.record(
         "Catches missing bashToolPatterns",
         any("bashToolPatterns" in e for e in errors),
@@ -180,7 +180,7 @@ def test_config_validation(results: TestResults):
         "zeroAccessPaths": [],
         "hookBehavior": {"onTimeout": "invalid"},
     }
-    errors = validate_protection_config(bad_config)
+    errors = validate_guardian_config(bad_config)
     results.record("Catches invalid onTimeout", any("onTimeout" in e for e in errors))
 
     # Test with invalid regex
@@ -188,7 +188,7 @@ def test_config_validation(results: TestResults):
         "bashToolPatterns": {"block": [{"pattern": "[invalid", "reason": "test"}], "ask": []},
         "zeroAccessPaths": [],
     }
-    errors = validate_protection_config(bad_config)
+    errors = validate_guardian_config(bad_config)
     results.record("Catches invalid regex", any("Invalid regex" in e for e in errors))
 
 
@@ -196,7 +196,7 @@ def test_block_patterns(results: TestResults):
     """Test block pattern matching."""
     results.set_section("Block Patterns")
 
-    from _protection_utils import match_block_patterns
+    from _guardian_utils import match_block_patterns
 
     # Should block
     tests = [
@@ -224,7 +224,7 @@ def test_ask_patterns(results: TestResults):
     """Test ask pattern matching."""
     results.set_section("Ask Patterns")
 
-    from _protection_utils import match_ask_patterns
+    from _guardian_utils import match_ask_patterns
 
     tests = [
         ("rm -rf temp/", True, "Recursive delete"),
@@ -241,11 +241,11 @@ def test_ask_patterns(results: TestResults):
         results.record(f"{desc}", matched == expected, expected, matched)
 
 
-def test_path_protection(results: TestResults):
-    """Test path-based protection."""
-    results.set_section("Path Protection")
+def test_path_guardian(results: TestResults):
+    """Test path-based guardian rules."""
+    results.set_section("Path Guardian")
 
-    from _protection_utils import match_no_delete, match_read_only, match_zero_access
+    from _guardian_utils import match_no_delete, match_read_only, match_zero_access
 
     # Zero access
     results.record("zeroAccess: .env", match_zero_access(".env"))
@@ -268,7 +268,7 @@ def test_git_functions(results: TestResults):
     """Test git integration functions."""
     results.set_section("Git Integration")
 
-    from _protection_utils import (
+    from _guardian_utils import (
         is_detached_head,
         is_git_available,
         is_rebase_or_merge_in_progress,
@@ -300,7 +300,7 @@ def test_timeout_handling(results: TestResults):
     """Test timeout handling functions."""
     results.set_section("Timeout Handling")
 
-    from _protection_utils import HookTimeoutError, with_timeout
+    from _guardian_utils import HookTimeoutError, with_timeout
 
     # Test normal execution (should complete)
     def quick_func():
@@ -332,7 +332,7 @@ def test_dry_run_mode(results: TestResults):
     """Test dry-run mode detection."""
     results.set_section("Dry-Run Mode")
 
-    from _protection_utils import is_dry_run
+    from _guardian_utils import is_dry_run
 
     # Save original
     original = os.environ.get("CLAUDE_HOOK_DRY_RUN")
@@ -364,7 +364,7 @@ def test_windows_compatibility(results: TestResults):
     """Test Windows-specific functionality."""
     results.set_section("Windows Compatibility")
 
-    from _protection_utils import normalize_path_for_matching
+    from _guardian_utils import normalize_path_for_matching
 
     # Test path normalization uses forward slashes
     test_path = "some\\path\\file.txt"
@@ -384,7 +384,7 @@ def test_response_helpers(results: TestResults):
     """Test hook response helpers."""
     results.set_section("Response Helpers")
 
-    from _protection_utils import allow_response, ask_response, deny_response
+    from _guardian_utils import allow_response, ask_response, deny_response
 
     # Deny response
     deny = deny_response("Test reason")
@@ -416,7 +416,7 @@ def test_circuit_breaker(results: TestResults):
     """Test circuit breaker functionality."""
     results.set_section("Circuit Breaker")
 
-    from _protection_utils import (
+    from _guardian_utils import (
         clear_circuit,
         get_circuit_file_path,
         is_circuit_open,
@@ -453,7 +453,7 @@ def test_circuit_breaker(results: TestResults):
 
 def main():
     print("=" * 50)
-    print("  Protection System Integration Tests (Phase 5)")
+    print("  Guardian System Integration Tests (Phase 5)")
     print("=" * 50)
     print(f"  Date: {datetime.now().isoformat()}")
     print(f"  Platform: {sys.platform}")
@@ -463,10 +463,10 @@ def main():
     print(f"  Test dir: {test_dir}")
 
     # Clear module cache to use test config
-    import _protection_utils
+    import _guardian_utils
 
-    _protection_utils._config_cache = None
-    _protection_utils._using_fallback_config = False
+    _guardian_utils._config_cache = None
+    _guardian_utils._using_fallback_config = False
 
     results = TestResults()
 
@@ -475,7 +475,7 @@ def main():
         test_config_validation(results)
         test_block_patterns(results)
         test_ask_patterns(results)
-        test_path_protection(results)
+        test_path_guardian(results)
         test_git_functions(results)
         test_timeout_handling(results)
         test_dry_run_mode(results)

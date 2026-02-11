@@ -1,34 +1,34 @@
 #!/usr/bin/env python3
-"""Protection utilities for Claude Code Guardian Plugin.
+"""Guardian utilities for Claude Code Guardian Plugin.
 
-This module provides shared utilities for all protection hooks:
-- Configuration loading from protection.json
+This module provides shared utilities for all guardian hooks:
+- Configuration loading from config.json
 - Pattern matching (regex for bash commands)
 - Path matching (glob for file paths)
 - Dry-run mode support
 - Logging
 
 # PLUGIN MIGRATION: Config resolution chain (3-step):
-#   1. $CLAUDE_PROJECT_DIR/.claude/guardian/protection.json (user custom)
-#   2. $CLAUDE_PLUGIN_ROOT/assets/protection.default.json (plugin default)
-#   3. Hardcoded _FALLBACK_PROTECTION (emergency fallback)
+#   1. $CLAUDE_PROJECT_DIR/.claude/guardian/config.json (user custom)
+#   2. $CLAUDE_PLUGIN_ROOT/assets/guardian.default.json (plugin default)
+#   3. Hardcoded _FALLBACK_CONFIG (emergency fallback)
 #
 # PLUGIN MIGRATION: Log location changed to .claude/guardian/guardian.log
 # PLUGIN MIGRATION: Circuit breaker changed to .claude/guardian/.circuit_open
-# PLUGIN MIGRATION: Self-protection reduced to config file only (dynamic path)
+# PLUGIN MIGRATION: Self-guarding reduced to config file only (dynamic path)
 
 Usage:
-    from _protection_utils import (
-        load_protection_config,
+    from _guardian_utils import (
+        load_guardian_config,
         match_block_patterns,
         match_zero_access,
         is_dry_run,
-        log_protection,
-        evaluate_protection,  # Orchestration function
+        log_guardian,
+        evaluate_rules,  # Orchestration function
         git_is_tracked,       # Git integration
     )
 
-Note on log_protection():
+Note on log_guardian():
     - Silent fail if CLAUDE_PROJECT_DIR not set
     - Silent fail on file write errors
     - This is intentional to avoid breaking hooks on logging issues
@@ -53,7 +53,7 @@ from pathlib import Path
 from typing import Any
 
 # ============================================================
-# ReDoS Protection: Optional regex module for timeout support
+# ReDoS Defense: Optional regex module for timeout support
 # ============================================================
 
 try:
@@ -114,7 +114,7 @@ class HookTimeoutError(Exception):
 
 
 def with_timeout(func, timeout_seconds: int = HOOK_DEFAULT_TIMEOUT_SECONDS):
-    """Execute function with timeout protection (Phase 5).
+    """Execute function with timeout guard (Phase 5).
 
     Platform-specific implementation:
     - Windows: threading-based timeout
@@ -173,7 +173,7 @@ def validate_commit_prefix(prefix: str, default: str = "auto-checkpoint") -> str
     """Validate and truncate commit message prefix if needed (m3 FIX).
 
     Centralizes prefix validation that was duplicated in auto_commit.py
-    and bash_protection.py.
+    and bash_guardian.py.
 
     Args:
         prefix: The prefix to validate.
@@ -186,7 +186,7 @@ def validate_commit_prefix(prefix: str, default: str = "auto-checkpoint") -> str
         return default
 
     if len(prefix) > COMMIT_PREFIX_MAX_LENGTH:
-        log_protection(
+        log_guardian(
             "WARN",
             f"Commit prefix too long ({len(prefix)} > {COMMIT_PREFIX_MAX_LENGTH}), truncating",
         )
@@ -259,9 +259,9 @@ def set_circuit_open(reason: str) -> None:
         circuit_file.parent.mkdir(parents=True, exist_ok=True)
         with open(circuit_file, "w", encoding="utf-8") as f:
             f.write(f"{datetime.now().isoformat()}|{reason}\n")
-        log_protection("WARN", f"Circuit breaker OPEN: {reason}")
+        log_guardian("WARN", f"Circuit breaker OPEN: {reason}")
     except Exception as e:
-        log_protection("ERROR", f"Failed to set circuit open: {e}")
+        log_guardian("ERROR", f"Failed to set circuit open: {e}")
 
 
 def is_circuit_open() -> tuple[bool, str]:
@@ -287,7 +287,7 @@ def is_circuit_open() -> tuple[bool, str]:
             return False, ""
 
         if age_seconds > CIRCUIT_TIMEOUT_SECONDS:
-            log_protection(
+            log_guardian(
                 "INFO", f"Circuit breaker auto-expired after {age_seconds / 3600:.1f} hours"
             )
             # M2 FIX: Use missing_ok to handle race condition
@@ -311,7 +311,7 @@ def is_circuit_open() -> tuple[bool, str]:
         return True, "Unknown reason"
     except PermissionError as e:
         # M1 FIX: Specific handling for permission errors with recovery guidance
-        log_protection(
+        log_guardian(
             "ERROR",
             f"Cannot read circuit breaker (permission denied): {e}\n"
             f"  Recovery: Check file permissions on {circuit_file}\n"
@@ -320,7 +320,7 @@ def is_circuit_open() -> tuple[bool, str]:
         return True, f"Circuit breaker permission error - check {circuit_file}"
     except OSError as e:
         # M1 FIX: File system errors with recovery guidance
-        log_protection(
+        log_guardian(
             "ERROR",
             f"Cannot read circuit breaker (filesystem error): {e}\n"
             f'  Recovery: Delete corrupted file: del "{circuit_file}"',
@@ -328,8 +328,8 @@ def is_circuit_open() -> tuple[bool, str]:
         return True, f"Circuit breaker filesystem error - delete {circuit_file}"
     except Exception as e:
         # SECURITY FIX: Fail-CLOSED - treat read errors as circuit open
-        # This prevents protection bypass when circuit file is corrupted/inaccessible
-        log_protection(
+        # This prevents guardian bypass when circuit file is corrupted/inaccessible
+        log_guardian(
             "ERROR",
             f"Cannot read circuit breaker (unexpected): {e}\n"
             f'  Recovery: Delete file manually: del "{circuit_file}"',
@@ -346,24 +346,24 @@ def clear_circuit() -> None:
     try:
         if circuit_file.exists():
             circuit_file.unlink()
-            log_protection("INFO", "Circuit breaker CLOSED")
+            log_guardian("INFO", "Circuit breaker CLOSED")
     except Exception as e:
-        log_protection("WARN", f"Failed to clear circuit: {e}")
+        log_guardian("WARN", f"Failed to clear circuit: {e}")
 
 
-# PLUGIN MIGRATION: Self-protection reduced to config file only.
+# PLUGIN MIGRATION: Self-guarding reduced to config file only.
 # In plugin context, scripts live in read-only plugin cache dir.
-# Only the user's config file needs protection from agent modification.
-SELF_PROTECTION_PATHS = (
-    ".claude/guardian/protection.json",
+# Only the user's config file needs guarding from agent modification.
+SELF_GUARDIAN_PATHS = (
+    ".claude/guardian/config.json",
 )
-"""Paths that are always protected from Edit/Write, even if not in config.
-This is a security measure to prevent protection bypass.
+"""Paths that are always guarded from Edit/Write, even if not in config.
+This is a security measure to prevent guardian bypass.
 PLUGIN MIGRATION: Reduced from 6 script paths to config-only."""
 
-# Hardcoded fallback protection for when protection.json is missing/corrupted
+# Hardcoded fallback config for when config.json is missing/corrupted
 # This ensures critical paths are ALWAYS protected even if config fails to load
-_FALLBACK_PROTECTION = {
+_FALLBACK_CONFIG = {
     "bashToolPatterns": {
         "block": [
             {"pattern": r"rm\s+-[rRf]+\s+/(?:\s*$|\*)", "reason": "[FALLBACK] Root deletion"},
@@ -380,6 +380,9 @@ _FALLBACK_PROTECTION = {
                 "reason": "[FALLBACK] Archive deletion",
             },
             {"pattern": r"git\s+push\s[^;|&\n]*(?:--force(?!-with-lease)|-f\b)", "reason": "[FALLBACK] Force push"},
+            {"pattern": r"(?:py|python[23]?|python\d[\d.]*)\s[^|&\n]*(?:os\.remove|os\.unlink|shutil\.rmtree|os\.rmdir|pathlib\.Path.*\.unlink)", "reason": "[FALLBACK] Interpreter deletion"},
+            {"pattern": r"(?:node|deno|bun)\s[^|&\n]*(?:unlinkSync|rmSync|rmdirSync|fs\.unlink|fs\.rm\b|promises\.unlink)", "reason": "[FALLBACK] Interpreter deletion"},
+            {"pattern": r"(?:perl|ruby)\s[^|&\n]*(?:\bunlink\b|File\.delete|FileUtils\.rm)", "reason": "[FALLBACK] Interpreter deletion"},
         ],
         "ask": [
             {"pattern": r"git\s+push\s[^;|&\n]*--force-with-lease", "reason": "[FALLBACK] Force push with lease"},
@@ -399,7 +402,7 @@ _FALLBACK_PROTECTION = {
     ],
     # PLUGIN MIGRATION: Updated readOnlyPaths to protect config instead of old hook paths
     "readOnlyPaths": [
-        ".claude/guardian/protection.json",
+        ".claude/guardian/config.json",
         "node_modules/**",
         "__pycache__/**",
         ".venv/**",
@@ -417,9 +420,9 @@ _config_cache: dict | None = None
 _using_fallback_config: bool = False
 """Flag indicating if fallback config is in use (M2 FIX)."""
 
-# PLUGIN MIGRATION: Track which config file was actually loaded (for dynamic self-protection)
+# PLUGIN MIGRATION: Track which config file was actually loaded (for dynamic self-guarding)
 _active_config_path: str | None = None
-"""Path to the config file that was actually loaded. Used for dynamic self-protection."""
+"""Path to the config file that was actually loaded. Used for dynamic self-guarding."""
 
 
 def get_project_dir() -> str:
@@ -437,15 +440,15 @@ def get_project_dir() -> str:
         return ""
 
     # Validate directory exists
-    # Note: Cannot call log_protection() here - would cause infinite recursion
-    # because log_protection() calls get_project_dir()
+    # Note: Cannot call log_guardian() here - would cause infinite recursion
+    # because log_guardian() calls get_project_dir()
     if not os.path.isdir(project_dir):
         return ""
 
     # Validate it's a git repo (has .git)
     # Note: No logging here to avoid recursion - git operations will fail gracefully
     # git_dir = os.path.join(project_dir, ".git")
-    # Non-git projects should still work for protection purposes
+    # Non-git projects should still work for guardian purposes
 
     return project_dir
 
@@ -461,22 +464,22 @@ def _get_plugin_root() -> str:
     return os.environ.get("CLAUDE_PLUGIN_ROOT", "")
 
 
-def load_protection_config() -> dict[str, Any]:
-    """Load protection.json with caching and fallback protection.
+def load_guardian_config() -> dict[str, Any]:
+    """Load config.json with caching and fallback.
 
     # PLUGIN MIGRATION: Config resolution chain (3-step):
-    #   1. $CLAUDE_PROJECT_DIR/.claude/guardian/protection.json (user custom)
-    #   2. $CLAUDE_PLUGIN_ROOT/assets/protection.default.json (plugin default)
-    #   3. Hardcoded _FALLBACK_PROTECTION (emergency fallback)
+    #   1. $CLAUDE_PROJECT_DIR/.claude/guardian/config.json (user custom)
+    #   2. $CLAUDE_PLUGIN_ROOT/assets/guardian.default.json (plugin default)
+    #   3. Hardcoded _FALLBACK_CONFIG (emergency fallback)
 
     The config is cached for the lifetime of the process.
     Since hooks run as separate processes, this is safe.
 
-    If config cannot be loaded, returns _FALLBACK_PROTECTION to ensure
+    If config cannot be loaded, returns _FALLBACK_CONFIG to ensure
     critical paths (.git, .claude, _archive) are always protected.
 
     Returns:
-        Configuration dict, or fallback protection on error.
+        Configuration dict, or fallback config on error.
         Never raises exceptions - returns safe default on any error.
 
     Note (M2 FIX):
@@ -490,31 +493,31 @@ def load_protection_config() -> dict[str, Any]:
 
     # PLUGIN MIGRATION: Step 1 -- User custom config in .claude/guardian/
     if project_dir:
-        config_path = Path(project_dir) / ".claude" / "guardian" / "protection.json"
+        config_path = Path(project_dir) / ".claude" / "guardian" / "config.json"
         if config_path.exists():
             try:
                 with open(config_path, encoding="utf-8") as f:
                     _config_cache = json.load(f)
                 _using_fallback_config = False
                 _active_config_path = str(config_path)
-                log_protection("INFO", f"Loaded config from {config_path}")
+                log_guardian("INFO", f"Loaded config from {config_path}")
                 return _config_cache
             except json.JSONDecodeError as e:
-                log_protection(
+                log_guardian(
                     "ERROR",
                     f"[FALLBACK] Invalid JSON in {config_path}: {e}\n"
-                    "  Using fallback. Fix JSON syntax to restore full protection.",
+                    "  Using fallback. Fix JSON syntax to restore full guardian config.",
                 )
                 # Fall through to next resolution step
             except OSError as e:
-                log_protection(
+                log_guardian(
                     "ERROR",
                     f"[FALLBACK] Failed to read {config_path}: {e}\n"
                     "  Check file permissions.",
                 )
                 # Fall through to next resolution step
             except Exception as e:
-                log_protection(
+                log_guardian(
                     "ERROR",
                     f"[FALLBACK] Unexpected error loading {config_path}: {e}",
                 )
@@ -523,21 +526,21 @@ def load_protection_config() -> dict[str, Any]:
     # PLUGIN MIGRATION: Step 2 -- Plugin default config
     plugin_root = _get_plugin_root()
     if plugin_root:
-        default_config_path = Path(plugin_root) / "assets" / "protection.default.json"
+        default_config_path = Path(plugin_root) / "assets" / "guardian.default.json"
         if default_config_path.exists():
             try:
                 with open(default_config_path, encoding="utf-8") as f:
                     _config_cache = json.load(f)
                 _using_fallback_config = False
                 _active_config_path = str(default_config_path)
-                log_protection(
+                log_guardian(
                     "INFO",
                     f"Using plugin default config from {default_config_path}\n"
                     "  Run /guardian:init to create a custom config for this project.",
                 )
                 return _config_cache
             except Exception as e:
-                log_protection(
+                log_guardian(
                     "ERROR",
                     f"[FALLBACK] Failed to load plugin default config: {e}",
                 )
@@ -545,52 +548,52 @@ def load_protection_config() -> dict[str, Any]:
 
     # PLUGIN MIGRATION: Step 3 -- Hardcoded fallback
     if not project_dir:
-        log_protection(
+        log_guardian(
             "WARN",
-            "[FALLBACK] CLAUDE_PROJECT_DIR not set - using minimal fallback protection.\n"
-            "  Custom protection rules from protection.json are NOT active.",
+            "[FALLBACK] CLAUDE_PROJECT_DIR not set - using minimal fallback config.\n"
+            "  Custom guardian rules from config.json are NOT active.",
         )
     else:
-        log_protection(
+        log_guardian(
             "WARN",
-            "[FALLBACK] No protection.json found in any location.\n"
-            "  Searched: .claude/guardian/protection.json"
+            "[FALLBACK] No config.json found in any location.\n"
+            "  Searched: .claude/guardian/config.json"
             + (f", plugin default" if plugin_root else "")
-            + "\n  Using minimal fallback protection. Run /guardian:init to set up.",
+            + "\n  Using minimal fallback config. Run /guardian:init to set up.",
         )
 
-    _config_cache = _FALLBACK_PROTECTION
+    _config_cache = _FALLBACK_CONFIG
     _using_fallback_config = True
     _active_config_path = None
     return _config_cache
 
 
 def is_using_fallback_config() -> bool:
-    """Check if fallback protection config is in use (M2 FIX).
+    """Check if fallback config is in use (M2 FIX).
 
-    Call this after load_protection_config() to determine if custom
-    protection rules are active or if minimal fallback is being used.
+    Call this after load_guardian_config() to determine if custom
+    guardian rules are active or if minimal fallback is being used.
 
     Returns:
         True if fallback config is active (custom rules NOT loaded).
-        False if protection.json was loaded successfully.
+        False if config.json was loaded successfully.
     """
     # Ensure config is loaded first
     if _config_cache is None:
-        load_protection_config()
+        load_guardian_config()
     return _using_fallback_config
 
 
 def get_active_config_path() -> str | None:
     """Get the path to the config file that was actually loaded.
 
-    # PLUGIN MIGRATION: New function for dynamic self-protection.
+    # PLUGIN MIGRATION: New function for dynamic self-guarding.
 
     Returns:
         Absolute path string to the loaded config, or None if using hardcoded fallback.
     """
     if _config_cache is None:
-        load_protection_config()
+        load_guardian_config()
     return _active_config_path
 
 
@@ -600,7 +603,7 @@ def get_hook_behavior() -> dict[str, Any]:
     Returns:
         hookBehavior dict with defaults applied.
     """
-    config = load_protection_config()
+    config = load_guardian_config()
     defaults = {
         "onTimeout": "deny",
         "onError": "deny",
@@ -610,10 +613,10 @@ def get_hook_behavior() -> dict[str, Any]:
     return {**defaults, **behavior}
 
 
-def validate_protection_config(config: dict) -> list[str]:
-    """Validate protection.json configuration (Phase 5).
+def validate_guardian_config(config: dict) -> list[str]:
+    """Validate guardian configuration (Phase 5).
 
-    Performs structural and semantic validation of the protection config:
+    Performs structural and semantic validation of the guardian config:
     - Checks required sections exist
     - Validates hookBehavior values
     - Validates regex pattern syntax
@@ -717,7 +720,7 @@ def is_dry_run() -> bool:
 
 
 # ============================================================
-# Safe Regex with Timeout Protection (ReDoS Prevention)
+# Safe Regex with Timeout Defense (ReDoS Prevention)
 # ============================================================
 
 
@@ -727,14 +730,14 @@ def safe_regex_search(
     flags: int = 0,
     timeout: float = REGEX_TIMEOUT_SECONDS,
 ) -> "re.Match | None":
-    """Regex search with timeout protection against ReDoS.
+    """Regex search with timeout defense against ReDoS.
 
     Uses the following strategy (in order of preference):
     1. `regex` module with timeout (if installed) - RECOMMENDED
     2. Standard `re` without timeout (logs warning on first use)
 
     Note: Python's standard `re` module does NOT support timeout.
-    Install the `regex` package for ReDoS protection: pip install regex
+    Install the `regex` package for ReDoS defense: pip install regex
 
     Args:
         pattern: Regular expression pattern.
@@ -756,7 +759,7 @@ def safe_regex_search(
                 exc_name = type(e).__name__.lower()
                 exc_msg = str(e).lower()
                 if "timeout" in exc_name or "timed out" in exc_msg:
-                    log_protection(
+                    log_guardian(
                         "WARN",
                         f"Regex timeout ({timeout}s) for pattern: {pattern[:50]}...",
                     )
@@ -764,22 +767,22 @@ def safe_regex_search(
                 # Re-raise if it's not a timeout error
                 raise
 
-        # Strategy 2: Fallback - no timeout protection (standard re module)
+        # Strategy 2: Fallback - no timeout defense (standard re module)
         if not getattr(safe_regex_search, "_warned_no_timeout", False):
-            log_protection(
+            log_guardian(
                 "WARN",
-                "No regex timeout protection available. "
-                "Install 'regex' package for ReDoS protection: pip install regex",
+                "No regex timeout defense available. "
+                "Install 'regex' package for ReDoS defense: pip install regex",
             )
             safe_regex_search._warned_no_timeout = True
 
         return re.search(pattern, text, flags)
 
     except re.error as e:
-        log_protection("WARN", f"Invalid regex pattern '{pattern[:50]}...': {e}")
+        log_guardian("WARN", f"Invalid regex pattern '{pattern[:50]}...': {e}")
         return None
     except Exception as e:
-        log_protection("WARN", f"Unexpected regex error: {e}")
+        log_guardian("WARN", f"Unexpected regex error: {e}")
         return None
 
 
@@ -805,20 +808,20 @@ def match_block_patterns(command: str) -> tuple[bool, str]:
     # An attacker could pad a dangerous command to exceed MAX_COMMAND_LENGTH,
     # bypassing all pattern checks. Deny oversized commands unconditionally.
     if len(command) > MAX_COMMAND_LENGTH:
-        log_protection(
+        log_guardian(
             "WARN",
             f"Command exceeds size limit ({len(command)} > {MAX_COMMAND_LENGTH} bytes), "
             "blocking (fail-close for security)",
         )
         return True, f"Command too large ({len(command)} bytes) - blocked for security"
 
-    config = load_protection_config()
+    config = load_guardian_config()
     pattern_configs = config.get("bashToolPatterns", {}).get("block", [])
 
     for pattern_config in pattern_configs:
         pattern = pattern_config.get("pattern", "")
         reason = pattern_config.get("reason", "Blocked by pattern")
-        # Use safe_regex_search with timeout protection
+        # Use safe_regex_search with timeout defense
         match = safe_regex_search(pattern, command, re.IGNORECASE | re.DOTALL)
         if match:
             return True, reason
@@ -841,20 +844,20 @@ def match_ask_patterns(command: str) -> tuple[bool, str]:
     """
     # F-02 FIX: Fail-CLOSE on oversized commands (consistent with match_block_patterns)
     if len(command) > MAX_COMMAND_LENGTH:
-        log_protection(
+        log_guardian(
             "WARN",
             f"Command exceeds size limit ({len(command)} > {MAX_COMMAND_LENGTH} bytes), "
             "requesting confirmation (fail-close for security)",
         )
         return True, f"Command too large ({len(command)} bytes) - requires confirmation"
 
-    config = load_protection_config()
+    config = load_guardian_config()
     pattern_configs = config.get("bashToolPatterns", {}).get("ask", [])
 
     for pattern_config in pattern_configs:
         pattern = pattern_config.get("pattern", "")
         reason = pattern_config.get("reason", "Requires confirmation")
-        # Use safe_regex_search with timeout protection
+        # Use safe_regex_search with timeout defense
         match = safe_regex_search(pattern, command, re.IGNORECASE | re.DOTALL)
         if match:
             return True, reason
@@ -895,7 +898,7 @@ def normalize_path(path: str) -> str:
         return normalized
     except Exception as e:
         # On any error, log warning and return original path (fail-open)
-        log_protection("WARN", f"Error normalizing path '{path}': {e}")
+        log_guardian("WARN", f"Error normalizing path '{path}': {e}")
         return path
 
 
@@ -917,7 +920,7 @@ def expand_path(path: str) -> Path:
         return p.resolve()
     except Exception as e:
         # On error, log warning and return Path of original (fail-open)
-        log_protection("WARN", f"Error expanding path '{path}': {e}")
+        log_guardian("WARN", f"Error expanding path '{path}': {e}")
         return Path(path)
 
 
@@ -958,13 +961,13 @@ def is_symlink_escape(path: str) -> bool:
             return False  # Within project, no escape
         except ValueError:
             # resolved is not relative to project = escape detected
-            log_protection(
+            log_guardian(
                 "WARN",
                 f"Symlink escape detected: {path} -> {resolved} (outside {project_resolved})",
             )
             return True
     except Exception as e:
-        log_protection("WARN", f"Error checking symlink escape for {path}: {e}")
+        log_guardian("WARN", f"Error checking symlink escape for {path}: {e}")
         return False  # Fail-open
 
 
@@ -995,7 +998,7 @@ def is_path_within_project(path: str) -> bool:
             return False
     except Exception as e:
         # Log warning and fail-open (allow operation)
-        log_protection("WARN", f"Error checking if path is within project '{path}': {e}")
+        log_guardian("WARN", f"Error checking if path is within project '{path}': {e}")
         return True  # Fail-open
 
 
@@ -1024,7 +1027,7 @@ def normalize_path_for_matching(path: str) -> str:
         return normalized
     except Exception as e:
         # On error, log warning and return original path (fail-open)
-        log_protection("WARN", f"Error normalizing path for matching '{path}': {e}")
+        log_guardian("WARN", f"Error normalizing path for matching '{path}': {e}")
         return path
 
 
@@ -1125,7 +1128,7 @@ def match_path_pattern(path: str, pattern: str) -> bool:
 
         return False
     except Exception as e:
-        log_protection("WARN", f"Error matching path {path} against {pattern}: {e}")
+        log_guardian("WARN", f"Error matching path {path} against {pattern}: {e}")
         return False
 
 
@@ -1138,7 +1141,7 @@ def match_zero_access(path: str) -> bool:
     Returns:
         True if path is in zeroAccessPaths.
     """
-    config = load_protection_config()
+    config = load_guardian_config()
     patterns = config.get("zeroAccessPaths", [])
     return any(match_path_pattern(path, p) for p in patterns)
 
@@ -1152,7 +1155,7 @@ def match_read_only(path: str) -> bool:
     Returns:
         True if path is in readOnlyPaths.
     """
-    config = load_protection_config()
+    config = load_guardian_config()
     patterns = config.get("readOnlyPaths", [])
     return any(match_path_pattern(path, p) for p in patterns)
 
@@ -1166,7 +1169,7 @@ def match_no_delete(path: str) -> bool:
     Returns:
         True if path is in noDeletePaths.
     """
-    config = load_protection_config()
+    config = load_guardian_config()
     patterns = config.get("noDeletePaths", [])
     return any(match_path_pattern(path, p) for p in patterns)
 
@@ -1175,7 +1178,7 @@ def match_allowed_external_path(path: str) -> bool:
     """Check if path matches allowedExternalPaths (permitted outside-project writes).
 
     These paths bypass ONLY the 'outside project' check.
-    All other checks (symlink, zeroAccess, readOnly, selfProtection) still apply.
+    All other checks (symlink, zeroAccess, readOnly, selfGuardian) still apply.
 
     Args:
         path: The path to check.
@@ -1183,7 +1186,7 @@ def match_allowed_external_path(path: str) -> bool:
     Returns:
         True if path is in allowedExternalPaths.
     """
-    config = load_protection_config()
+    config = load_guardian_config()
     patterns = config.get("allowedExternalPaths", [])
     return any(match_path_pattern(path, p) for p in patterns)
 
@@ -1228,10 +1231,10 @@ def _rotate_log_if_needed(log_file: Path) -> None:
         pass
 
 
-def log_protection(level: str, message: str) -> None:
-    """Log a protection event to guardian.log.
+def log_guardian(level: str, message: str) -> None:
+    """Log a guardian event to guardian.log.
 
-    # PLUGIN MIGRATION: Log location changed from .claude/hooks/protection.log
+    # PLUGIN MIGRATION: Log location changed from .claude/hooks/guardian.log
     #   to .claude/guardian/guardian.log
 
     Log format:
@@ -1250,7 +1253,7 @@ def log_protection(level: str, message: str) -> None:
     if not project_dir:
         return
 
-    # PLUGIN MIGRATION: Changed from .claude/hooks/protection.log to .claude/guardian/guardian.log
+    # PLUGIN MIGRATION: Changed from .claude/hooks/ to .claude/guardian/guardian.log
     log_file = Path(project_dir) / ".claude" / "guardian" / "guardian.log"
 
     try:
@@ -1357,12 +1360,12 @@ def allow_response() -> dict[str, Any]:
 
 
 # ============================================================
-# Protection Evaluation (Orchestration)
+# Rule Evaluation (Orchestration)
 # ============================================================
 
 
-def evaluate_protection(command: str) -> tuple[str, str]:
-    """Evaluate command against all protection rules.
+def evaluate_rules(command: str) -> tuple[str, str]:
+    """Evaluate command against all configured rules.
 
     Applies precedence order:
     1. Block patterns → "deny"
@@ -1391,11 +1394,11 @@ def evaluate_protection(command: str) -> tuple[str, str]:
         if needs_ask:
             return "ask", reason
 
-        # 3. No protection triggered
+        # 3. No rule triggered
         return "allow", ""
     except Exception as e:
         # Fail-open: on any error, allow and log
-        log_protection("ERROR", f"Error in evaluate_protection: {e}")
+        log_guardian("ERROR", f"Error in evaluate_rules: {e}")
         return "allow", ""
 
 
@@ -1419,7 +1422,7 @@ def git_is_tracked(path: str) -> bool:
     """
     # Check git availability first
     if not is_git_available():
-        log_protection("WARN", "Git not available - cannot check tracking")
+        log_guardian("WARN", "Git not available - cannot check tracking")
         return False
 
     project_dir = get_project_dir()
@@ -1438,13 +1441,13 @@ def git_is_tracked(path: str) -> bool:
         )
         return result.returncode == 0
     except FileNotFoundError:
-        log_protection("WARN", "Git executable not found in PATH")
+        log_guardian("WARN", "Git executable not found in PATH")
         return False
     except subprocess.TimeoutExpired:
-        log_protection("WARN", f"Git ls-files timeout for {path} - treating as untracked (safer)")
+        log_guardian("WARN", f"Git ls-files timeout for {path} - treating as untracked (safer)")
         return False  # Fail-safe: archive will be attempted for safety
     except Exception as e:
-        log_protection("WARN", f"Error checking git tracking for {path}: {e}")
+        log_guardian("WARN", f"Error checking git tracking for {path}: {e}")
         return False
 
 
@@ -1518,7 +1521,7 @@ def git_has_changes() -> bool:
     """
     # Check git availability first
     if not is_git_available():
-        log_protection("WARN", "Git not available - cannot check changes")
+        log_guardian("WARN", "Git not available - cannot check changes")
         return False
 
     project_dir = get_project_dir()
@@ -1538,17 +1541,17 @@ def git_has_changes() -> bool:
         # CRITICAL-1 FIX: Check returncode to distinguish "no changes" from "git error"
         if result.returncode != 0:
             stderr_msg = (result.stderr or "")[:500]
-            log_protection("WARN", f"Git status failed (rc={result.returncode}): {stderr_msg}")
+            log_guardian("WARN", f"Git status failed (rc={result.returncode}): {stderr_msg}")
             return False
         return bool(result.stdout.strip())
     except FileNotFoundError:
-        log_protection("WARN", "Git executable not found in PATH")
+        log_guardian("WARN", "Git executable not found in PATH")
         return False
     except subprocess.TimeoutExpired:
-        log_protection("WARN", "Git status timeout")
+        log_guardian("WARN", "Git status timeout")
         return False
     except Exception as e:
-        log_protection("WARN", f"Error checking git changes: {e}")
+        log_guardian("WARN", f"Error checking git changes: {e}")
         return False
 
 
@@ -1595,7 +1598,7 @@ def git_add_all(max_retries: int = 3) -> bool:
     """
     # Check git availability first
     if not is_git_available():
-        log_protection("WARN", "Git not available - cannot stage changes")
+        log_guardian("WARN", "Git not available - cannot stage changes")
         return False
 
     project_dir = get_project_dir()
@@ -1614,34 +1617,34 @@ def git_add_all(max_retries: int = 3) -> bool:
                 timeout=30,
             )
             if result.returncode == 0:
-                log_protection("INFO", "Git add -A succeeded")
+                log_guardian("INFO", "Git add -A succeeded")
                 # Also log stderr if present (could contain warnings)
                 if result.stderr:
-                    log_protection("INFO", f"Git add -A note: {result.stderr[:500]}")
+                    log_guardian("INFO", f"Git add -A note: {result.stderr[:500]}")
                 return True
 
             stderr = result.stderr or ""
             if _is_git_lock_error(stderr) and attempt < max_retries - 1:
-                log_protection("INFO", f"Git lock detected, retry {attempt + 1}/{max_retries}")
+                log_guardian("INFO", f"Git lock detected, retry {attempt + 1}/{max_retries}")
                 time.sleep(0.5 * (attempt + 1))
                 continue
 
-            log_protection("WARN", f"Git add -A stderr: {stderr[:500]}")
+            log_guardian("WARN", f"Git add -A stderr: {stderr[:500]}")
             return False
 
         except FileNotFoundError:
-            log_protection("WARN", "Git executable not found in PATH")
+            log_guardian("WARN", "Git executable not found in PATH")
             return False
         except subprocess.TimeoutExpired:
             # M4 FIX: Retry on timeout (system may be under load)
             if attempt < max_retries - 1:
-                log_protection("INFO", f"Git add -A timeout, retry {attempt + 1}/{max_retries}")
+                log_guardian("INFO", f"Git add -A timeout, retry {attempt + 1}/{max_retries}")
                 time.sleep(1.0 * (attempt + 1))
                 continue
-            log_protection("WARN", "Git add -A timeout after all retries")
+            log_guardian("WARN", "Git add -A timeout after all retries")
             return False
         except Exception as e:
-            log_protection("WARN", f"Error staging all changes: {e}")
+            log_guardian("WARN", f"Error staging all changes: {e}")
             return False
 
     return False
@@ -1658,7 +1661,7 @@ def git_add_tracked(max_retries: int = 3) -> bool:
     """
     # Check git availability first
     if not is_git_available():
-        log_protection("WARN", "Git not available - cannot stage changes")
+        log_guardian("WARN", "Git not available - cannot stage changes")
         return False
 
     project_dir = get_project_dir()
@@ -1677,34 +1680,34 @@ def git_add_tracked(max_retries: int = 3) -> bool:
                 timeout=30,
             )
             if result.returncode == 0:
-                log_protection("INFO", "Git add -u succeeded")
+                log_guardian("INFO", "Git add -u succeeded")
                 # Also log stderr if present (could contain warnings)
                 if result.stderr:
-                    log_protection("INFO", f"Git add -u note: {result.stderr[:500]}")
+                    log_guardian("INFO", f"Git add -u note: {result.stderr[:500]}")
                 return True
 
             stderr = result.stderr or ""
             if _is_git_lock_error(stderr) and attempt < max_retries - 1:
-                log_protection("INFO", f"Git lock detected, retry {attempt + 1}/{max_retries}")
+                log_guardian("INFO", f"Git lock detected, retry {attempt + 1}/{max_retries}")
                 time.sleep(0.5 * (attempt + 1))
                 continue
 
-            log_protection("WARN", f"Git add -u stderr: {stderr[:500]}")
+            log_guardian("WARN", f"Git add -u stderr: {stderr[:500]}")
             return False
 
         except FileNotFoundError:
-            log_protection("WARN", "Git executable not found in PATH")
+            log_guardian("WARN", "Git executable not found in PATH")
             return False
         except subprocess.TimeoutExpired:
             # M4 FIX: Retry on timeout (system may be under load)
             if attempt < max_retries - 1:
-                log_protection("INFO", f"Git add -u timeout, retry {attempt + 1}/{max_retries}")
+                log_guardian("INFO", f"Git add -u timeout, retry {attempt + 1}/{max_retries}")
                 time.sleep(1.0 * (attempt + 1))
                 continue
-            log_protection("WARN", "Git add -u timeout after all retries")
+            log_guardian("WARN", "Git add -u timeout after all retries")
             return False
         except Exception as e:
-            log_protection("WARN", f"Error staging tracked changes: {e}")
+            log_guardian("WARN", f"Error staging tracked changes: {e}")
             return False
 
     return False
@@ -1714,9 +1717,9 @@ def ensure_git_config() -> bool:
     """Ensure git user.email and user.name are configured.
 
     Git requires these to be set for commits. If not set, we set
-    defaults from protection.json or hardcoded fallbacks.
+    defaults from config.json or hardcoded fallbacks.
 
-    MINOR-2 FIX: Now reads identity from protection.json gitIntegration.identity
+    MINOR-2 FIX: Now reads identity from config.json gitIntegration.identity
     MAJOR-4 FIX: Now checks return codes from git config commands
     m4 FIX: Now verifies config values after setting
 
@@ -1731,7 +1734,7 @@ def ensure_git_config() -> bool:
         return False
 
     # MINOR-2 FIX: Get identity from config (with hardcoded fallbacks)
-    config = load_protection_config()
+    config = load_guardian_config()
     git_integration = config.get("gitIntegration", {})
     identity = git_integration.get("identity", {})
     default_email = identity.get("email", "auto-commit@ops.local")
@@ -1776,16 +1779,16 @@ def ensure_git_config() -> bool:
                     timeout=5,
                 )
                 if verify_result.stdout.strip() == default_email:
-                    log_protection("INFO", f"Set and verified git user.email: {default_email}")
+                    log_guardian("INFO", f"Set and verified git user.email: {default_email}")
                     email_ok = True
                 else:
-                    log_protection(
+                    log_guardian(
                         "WARN",
                         f"Git user.email set but verification failed. "
                         f"Expected: {default_email}, Got: {verify_result.stdout.strip()}",
                     )
             else:
-                log_protection("WARN", f"Failed to set git user.email: {set_result.stderr}")
+                log_guardian("WARN", f"Failed to set git user.email: {set_result.stderr}")
 
         # Check if user.name is set
         result = subprocess.run(
@@ -1822,23 +1825,23 @@ def ensure_git_config() -> bool:
                     timeout=5,
                 )
                 if verify_result.stdout.strip() == default_name:
-                    log_protection("INFO", f"Set and verified git user.name: {default_name}")
+                    log_guardian("INFO", f"Set and verified git user.name: {default_name}")
                     name_ok = True
                 else:
-                    log_protection(
+                    log_guardian(
                         "WARN",
                         f"Git user.name set but verification failed. "
                         f"Expected: {default_name}, Got: {verify_result.stdout.strip()}",
                     )
             else:
-                log_protection("WARN", f"Failed to set git user.name: {set_result.stderr}")
+                log_guardian("WARN", f"Failed to set git user.name: {set_result.stderr}")
 
         # Return True only if both are OK (fail-open: let git commit try anyway)
         if not email_ok or not name_ok:
-            log_protection("WARN", f"Git config incomplete: email_ok={email_ok}, name_ok={name_ok}")
+            log_guardian("WARN", f"Git config incomplete: email_ok={email_ok}, name_ok={name_ok}")
         return True  # Fail-open: let git commit try anyway
     except Exception as e:
-        log_protection("WARN", f"Could not verify/set git config: {e}")
+        log_guardian("WARN", f"Could not verify/set git config: {e}")
         return True  # Fail-open: let git commit try anyway
 
 
@@ -1855,7 +1858,7 @@ def git_commit(message: str, max_retries: int = 3, no_verify: bool = False) -> b
     """
     # Check git availability first
     if not is_git_available():
-        log_protection("WARN", "Git not available - cannot commit")
+        log_guardian("WARN", "Git not available - cannot commit")
         return False
 
     # Ensure git config is set (user.email, user.name)
@@ -1883,10 +1886,10 @@ def git_commit(message: str, max_retries: int = 3, no_verify: bool = False) -> b
                 timeout=30,
             )
             if result.returncode == 0:
-                log_protection("INFO", "Git commit succeeded")
+                log_guardian("INFO", "Git commit succeeded")
                 # Also log stderr if present (could contain warnings)
                 if result.stderr:
-                    log_protection("INFO", f"Git commit note: {result.stderr[:500]}")
+                    log_guardian("INFO", f"Git commit note: {result.stderr[:500]}")
                 return True
 
             # BUG-1 FIX: Check for "nothing to commit" case before treating as error
@@ -1898,30 +1901,30 @@ def git_commit(message: str, max_retries: int = 3, no_verify: bool = False) -> b
                 "nothing to commit" in combined_output
                 or "nothing added to commit" in combined_output
             ):
-                log_protection("INFO", "Nothing to commit (no staged changes)")
+                log_guardian("INFO", "Nothing to commit (no staged changes)")
                 return True  # This is a valid success case, not an error
 
             if _is_git_lock_error(stderr) and attempt < max_retries - 1:
-                log_protection("INFO", f"Git lock detected, retry {attempt + 1}/{max_retries}")
+                log_guardian("INFO", f"Git lock detected, retry {attempt + 1}/{max_retries}")
                 time.sleep(0.5 * (attempt + 1))
                 continue
 
-            log_protection("WARN", f"Git commit stderr: {stderr[:500]}")
+            log_guardian("WARN", f"Git commit stderr: {stderr[:500]}")
             return False
 
         except FileNotFoundError:
-            log_protection("WARN", "Git executable not found in PATH")
+            log_guardian("WARN", "Git executable not found in PATH")
             return False
         except subprocess.TimeoutExpired:
             # M4 FIX: Retry on timeout (system may be under load)
             if attempt < max_retries - 1:
-                log_protection("INFO", f"Git commit timeout, retry {attempt + 1}/{max_retries}")
+                log_guardian("INFO", f"Git commit timeout, retry {attempt + 1}/{max_retries}")
                 time.sleep(1.0 * (attempt + 1))
                 continue
-            log_protection("WARN", "Git commit timeout after all retries")
+            log_guardian("WARN", "Git commit timeout after all retries")
             return False
         except Exception as e:
-            log_protection("WARN", f"Error creating commit: {e}")
+            log_guardian("WARN", f"Error creating commit: {e}")
             return False
 
     return False
@@ -1960,18 +1963,18 @@ def git_get_last_commit_hash() -> str:
         # MINOR-1 FIX: Detect empty repo explicitly
         stderr = result.stderr or ""
         if "does not have any commits" in stderr or "no commits yet" in stderr:
-            log_protection("INFO", "Repository has no commits yet")
+            log_guardian("INFO", "Repository has no commits yet")
         else:
-            log_protection("WARN", f"Git rev-parse failed: {stderr[:200]}")
+            log_guardian("WARN", f"Git rev-parse failed: {stderr[:200]}")
         return ""
     except FileNotFoundError:
-        log_protection("WARN", "Git executable not found in PATH")
+        log_guardian("WARN", "Git executable not found in PATH")
         return ""
     except subprocess.TimeoutExpired:
-        log_protection("WARN", "Git rev-parse timeout")
+        log_guardian("WARN", "Git rev-parse timeout")
         return ""
     except Exception as e:
-        log_protection("WARN", f"Error getting commit hash: {e}")
+        log_guardian("WARN", f"Error getting commit hash: {e}")
         return ""
 
 
@@ -2007,13 +2010,13 @@ def is_detached_head() -> bool:
         # Exit 1 = detached HEAD (no symbolic-ref)
         return result.returncode != 0
     except FileNotFoundError:
-        log_protection("WARN", "Git executable not found in PATH")
+        log_guardian("WARN", "Git executable not found in PATH")
         return False
     except subprocess.TimeoutExpired:
-        log_protection("WARN", "Git symbolic-ref timeout")
+        log_guardian("WARN", "Git symbolic-ref timeout")
         return False
     except Exception as e:
-        log_protection("WARN", f"Error checking detached HEAD: {e}")
+        log_guardian("WARN", f"Error checking detached HEAD: {e}")
         return False
 
 
@@ -2041,14 +2044,14 @@ def is_rebase_or_merge_in_progress() -> bool:
 
     for indicator in state_indicators:
         if indicator.exists():
-            log_protection("INFO", f"Git operation in progress: {indicator.name}")
+            log_guardian("INFO", f"Git operation in progress: {indicator.name}")
             return True
 
     return False
 
 
 # ============================================================
-# Path Protection Hook Runner (Shared Edit/Write Logic)
+# Path Guardian Hook Runner (Shared Edit/Write Logic)
 # ============================================================
 
 
@@ -2088,20 +2091,20 @@ def truncate_command(command: str, max_length: int = MAX_COMMAND_PREVIEW_LENGTH)
     return f"{command[: max_length - 3]}..."
 
 
-def is_self_protection_path(path: str) -> bool:
-    """Check if path is a self-protection path (protection system itself).
+def is_self_guardian_path(path: str) -> bool:
+    """Check if path is a self-guarded path (guardian system files).
 
     These paths are ALWAYS protected regardless of configuration.
 
     # PLUGIN MIGRATION: Now uses dynamic config path detection in addition
-    # to static SELF_PROTECTION_PATHS. In plugin context, only the config
-    # file needs protection (scripts are in read-only cache).
+    # to static SELF_GUARDIAN_PATHS. In plugin context, only the config
+    # file needs guarding (scripts are in read-only cache).
 
     Args:
         path: Path to check.
 
     Returns:
-        True if path should be protected as part of protection system.
+        True if path should be protected as part of guardian system.
     """
     # Normalize path for comparison
     norm_path = normalize_path_for_matching(path)
@@ -2114,8 +2117,8 @@ def is_self_protection_path(path: str) -> bool:
     if sys.platform == "win32":
         project_normalized = project_normalized.lower()
 
-    # Check static self-protection paths
-    for protected in SELF_PROTECTION_PATHS:
+    # Check static self-guardian paths
+    for protected in SELF_GUARDIAN_PATHS:
         protected_norm = protected.replace("\\", "/")
         if sys.platform == "win32":
             protected_norm = protected_norm.lower()
@@ -2156,18 +2159,18 @@ def resolve_tool_path(file_path: str) -> Path:
     try:
         return path.resolve()
     except OSError as e:
-        log_protection("WARN", f"Could not resolve path {file_path}: {e}")
+        log_guardian("WARN", f"Could not resolve path {file_path}: {e}")
         return path
 
 
-def run_path_protection_hook(tool_name: str) -> None:
-    """Run protection checks for Edit/Write tools.
+def run_path_guardian_hook(tool_name: str) -> None:
+    """Run guardian checks for Read/Edit/Write tools.
 
-    This is the main entry point for path-based protection hooks.
+    This is the main entry point for path-based guardian hooks.
     It implements fail-close semantics for security.
 
     Args:
-        tool_name: The tool name to check for ("Edit" or "Write").
+        tool_name: The tool name to check for ("Read", "Edit", or "Write").
     """
     import json as _json  # Local import to avoid circular dependency issues
 
@@ -2176,7 +2179,7 @@ def run_path_protection_hook(tool_name: str) -> None:
         input_data = _json.load(sys.stdin)
     except _json.JSONDecodeError as e:
         # SECURITY FIX: Fail-close on malformed input
-        log_protection("ERROR", f"Malformed JSON input: {e}")
+        log_guardian("ERROR", f"Malformed JSON input: {e}")
         print(_json.dumps(deny_response("Invalid hook input (malformed JSON)")))
         sys.exit(0)
 
@@ -2189,7 +2192,7 @@ def run_path_protection_hook(tool_name: str) -> None:
     # Validate tool_input is a dict
     tool_input = input_data.get("tool_input", {})
     if not isinstance(tool_input, dict):
-        log_protection("WARN", f"Invalid tool_input type: {type(tool_input).__name__}")
+        log_guardian("WARN", f"Invalid tool_input type: {type(tool_input).__name__}")
         print(_json.dumps(deny_response("Invalid tool input structure")))
         sys.exit(0)
 
@@ -2198,20 +2201,20 @@ def run_path_protection_hook(tool_name: str) -> None:
 
     # Validate file_path
     if not file_path:
-        log_protection("WARN", f"{tool_name} called without file_path")
+        log_guardian("WARN", f"{tool_name} called without file_path")
         # Allow - some tools might legitimately have no path
         # Note: No response = allow in Claude Code hook protocol
         print(_json.dumps(allow_response()))
         sys.exit(0)
 
     if not isinstance(file_path, str):
-        log_protection("WARN", f"Invalid file_path type: {type(file_path).__name__}")
+        log_guardian("WARN", f"Invalid file_path type: {type(file_path).__name__}")
         print(_json.dumps(deny_response("Invalid file path type")))
         sys.exit(0)
 
     # Check for null bytes (path injection attack)
     if "\x00" in file_path:
-        log_protection("BLOCK", f"Null byte in path rejected: {truncate_path(file_path)}")
+        log_guardian("BLOCK", f"Null byte in path rejected: {truncate_path(file_path)}")
         print(_json.dumps(deny_response("Invalid file path (contains null byte)")))
         sys.exit(0)
 
@@ -2220,13 +2223,13 @@ def run_path_protection_hook(tool_name: str) -> None:
     path_str = str(resolved)
     path_preview = truncate_path(file_path)
 
-    log_protection("INFO", f"{tool_name} check: {path_preview}")
+    log_guardian("INFO", f"{tool_name} check: {path_preview}")
 
     # ========== Check: Symlink Escape ==========
     if is_symlink_escape(file_path):
-        log_protection("BLOCK", f"Symlink escape detected ({tool_name}): {path_preview}")
+        log_guardian("BLOCK", f"Symlink escape detected ({tool_name}): {path_preview}")
         if is_dry_run():
-            log_protection("DRY-RUN", f"Would DENY {tool_name} (symlink escape)")
+            log_guardian("DRY-RUN", f"Would DENY {tool_name} (symlink escape)")
             sys.exit(0)
         print(_json.dumps(deny_response(f"Symlink points outside project: {Path(file_path).name}")))
         sys.exit(0)
@@ -2235,48 +2238,49 @@ def run_path_protection_hook(tool_name: str) -> None:
     if not is_path_within_project(path_str):
         # Check if path is in allowedExternalPaths before blocking
         if match_allowed_external_path(path_str):
-            log_protection(
+            log_guardian(
                 "ALLOW",
                 f"Allowed external path ({tool_name}): {path_preview}"
             )
-            # Fall through to remaining checks (self-protection, zeroAccess, readOnly)
+            # Fall through to remaining checks (self-guardian, zeroAccess, readOnly)
         else:
-            log_protection("BLOCK", f"Path outside project ({tool_name}): {path_preview}")
+            log_guardian("BLOCK", f"Path outside project ({tool_name}): {path_preview}")
             if is_dry_run():
-                log_protection("DRY-RUN", f"Would DENY {tool_name} (outside project)")
+                log_guardian("DRY-RUN", f"Would DENY {tool_name} (outside project)")
                 sys.exit(0)
             print(_json.dumps(deny_response("Path is outside project directory")))
             sys.exit(0)
 
-    # ========== Check: Self Protection ==========
-    if is_self_protection_path(path_str):
-        log_protection("BLOCK", f"Self-protection path ({tool_name}): {path_preview}")
+    # ========== Check: Self Guardian ==========
+    if is_self_guardian_path(path_str):
+        log_guardian("BLOCK", f"Self-guardian path ({tool_name}): {path_preview}")
         if is_dry_run():
-            log_protection("DRY-RUN", f"Would DENY {tool_name} (self-protection)")
+            log_guardian("DRY-RUN", f"Would DENY {tool_name} (self-guardian)")
             sys.exit(0)
         print(_json.dumps(deny_response(f"Protected system file: {Path(file_path).name}")))
         sys.exit(0)
 
     # ========== Check: Zero Access ==========
     if match_zero_access(path_str):
-        log_protection("BLOCK", f"Zero access path ({tool_name}): {path_preview}")
+        log_guardian("BLOCK", f"Zero access path ({tool_name}): {path_preview}")
         if is_dry_run():
-            log_protection("DRY-RUN", f"Would DENY {tool_name}")
+            log_guardian("DRY-RUN", f"Would DENY {tool_name}")
             sys.exit(0)
         print(_json.dumps(deny_response(f"Protected file (no access): {Path(file_path).name}")))
         sys.exit(0)
 
     # ========== Check: Read Only ==========
-    if match_read_only(path_str):
-        log_protection("BLOCK", f"Read-only path ({tool_name}): {path_preview}")
+    # Skip readOnly check for Read tool — reading read-only files is allowed
+    if tool_name.lower() != "read" and match_read_only(path_str):
+        log_guardian("BLOCK", f"Read-only path ({tool_name}): {path_preview}")
         if is_dry_run():
-            log_protection("DRY-RUN", f"Would DENY {tool_name}")
+            log_guardian("DRY-RUN", f"Would DENY {tool_name}")
             sys.exit(0)
         print(_json.dumps(deny_response(f"Read-only file: {Path(file_path).name}")))
         sys.exit(0)
 
     # ========== Allow ==========
-    log_protection("ALLOW", f"{tool_name}: {path_preview}")
+    log_guardian("ALLOW", f"{tool_name}: {path_preview}")
     sys.exit(0)
 
 
@@ -2286,11 +2290,11 @@ def run_path_protection_hook(tool_name: str) -> None:
 
 
 if __name__ == "__main__":
-    print("_protection_utils.py - Module loaded successfully")
+    print("_guardian_utils.py - Module loaded successfully")
     print(f"Project dir: {get_project_dir()}")
     print(f"Plugin root: {_get_plugin_root()}")
     print(f"Dry-run mode: {is_dry_run()}")
-    print(f"Config loaded: {bool(load_protection_config())}")
+    print(f"Config loaded: {bool(load_guardian_config())}")
     print(f"Active config path: {get_active_config_path()}")
-    print(f"Self-protection paths: {SELF_PROTECTION_PATHS}")
+    print(f"Self-guardian paths: {SELF_GUARDIAN_PATHS}")
     print(f"Regex timeout available: {_HAS_REGEX_TIMEOUT}")

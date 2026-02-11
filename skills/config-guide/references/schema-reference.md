@@ -1,6 +1,6 @@
-# Protection Schema Reference
+# Guardian Schema Reference
 
-Complete documentation for `protection.json` -- the Guardian configuration file.
+Complete documentation for `config.json` -- the Guardian configuration file.
 
 ---
 
@@ -101,11 +101,11 @@ Commands matching these patterns **require user confirmation**. The reason is di
 
 ---
 
-## Path Protection Arrays
+## Path Guarding Arrays
 
 Three arrays control file-level access. Each accepts glob patterns.
 
-### Protection Levels
+### Access Levels
 
 | Array | Read | Write | Delete | Use For |
 |-------|------|-------|--------|---------|
@@ -115,7 +115,7 @@ Three arrays control file-level access. Each accepts glob patterns.
 
 ### zeroAccessPaths
 
-Files that cannot be read, written, or deleted. The strongest protection level.
+Files that cannot be read, written, or deleted. The strongest guarding level.
 
 ```json
 "zeroAccessPaths": [
@@ -261,7 +261,7 @@ Git author identity used for Guardian auto-commits. Separates automated commits 
 
 ## Regex Pattern Cookbook
 
-Copy-paste patterns for common protection scenarios.
+Copy-paste patterns for common guarding scenarios.
 
 ### Package Management
 ```json

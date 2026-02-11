@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
-# PLUGIN MIGRATION: Migrated from ops/.claude/hooks/_protection/
+# PLUGIN MIGRATION: Migrated from ops/.claude/hooks/ to plugin structure
 # Import paths unchanged - scripts are colocated in hooks/scripts/
 
-"""Edit Tool Protection Hook.
+"""Edit Guardian Hook.
 
 Protects files from unauthorized editing by:
 1. Blocking zeroAccess paths (secrets, credentials)
 2. Blocking readOnly paths (dependencies, generated files)
 3. Blocking symlink escapes (security)
 4. Blocking paths outside project (security)
-5. Blocking self-protection paths (protection system files)
+5. Blocking self-guarded paths (guardian system files)
 
-Phase: 3 (Edit/Write Protection)
+Phase: 3 (Edit/Write Guardian)
 
 Design Principles:
-- Fail-Close: If protection system fails, deny the operation
-- Use shared utilities from _protection_utils.py
-- Thin wrapper: All logic in run_path_protection_hook()
+- Fail-Close: If guardian system fails, deny the operation
+- Use shared utilities from _guardian_utils.py
+- Thin wrapper: All logic in run_path_guardian_hook()
 """
 
 import json
@@ -27,20 +27,20 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 try:
-    from _protection_utils import (
-        log_protection,
-        run_path_protection_hook,
+    from _guardian_utils import (
+        log_guardian,
+        run_path_guardian_hook,
         set_circuit_open,  # Phase 4 Fix: Circuit Breaker
     )
 except ImportError as e:
-    # Fail-close: protection system unavailable = block all
+    # Fail-close: guardian system unavailable = block all
     print(
         json.dumps(
             {
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
                     "permissionDecision": "deny",
-                    "permissionDecisionReason": f"Protection system unavailable: {e}",
+                    "permissionDecisionReason": f"Guardian system unavailable: {e}",
                 }
             }
         )
@@ -50,7 +50,7 @@ except ImportError as e:
 
 def main() -> None:
     """Main hook entry point."""
-    run_path_protection_hook("Edit")
+    run_path_guardian_hook("Edit")
 
 
 if __name__ == "__main__":
@@ -58,16 +58,16 @@ if __name__ == "__main__":
         main()
     except Exception as e:
         # Fail-close: on unexpected errors, deny for safety
-        log_protection("ERROR", f"Edit protection error: {type(e).__name__}: {e}")
+        log_guardian("ERROR", f"Edit guardian error: {type(e).__name__}: {e}")
         # Set circuit open to prevent auto-commit of potentially corrupted state
-        set_circuit_open(f"edit_protection crashed: {type(e).__name__}")
+        set_circuit_open(f"edit_guardian crashed: {type(e).__name__}")
         print(
             json.dumps(
                 {
                     "hookSpecificOutput": {
                         "hookEventName": "PreToolUse",
                         "permissionDecision": "deny",
-                        "permissionDecisionReason": f"Protection system error: {e}",
+                        "permissionDecisionReason": f"Guardian system error: {e}",
                     }
                 }
             )

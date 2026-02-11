@@ -6,31 +6,23 @@
     "name": "idnotbe",
     "url": "https://github.com/idnotbe"
   },
-  "hooks": "./hooks/hooks.json",
   "commands": [
     "./commands/init.md"
   ],
   "skills": [
-    "./skills/config-guide/SKILL.md"
+    "./skills/config-guide"
   ],
   "agents": [
     "./agents/config-assistant.md"
   ],
   "homepage": "https://github.com/idnotbe/claude-code-guardian",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/idnotbe/claude-code-guardian.git"
-  },
+  "repository": "https://github.com/idnotbe/claude-code-guardian",
   "license": "MIT",
   "keywords": [
     "security",
-    "protection",
+    "guardian",
     "guardrails",
     "hooks",
     "safety"
-  ],
-  "engines": {
-    "claude-code": ">=1.0.0",
-    "python": ">=3.10"
-  }
+  ]
 }

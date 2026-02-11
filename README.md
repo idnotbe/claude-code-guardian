@@ -66,22 +66,22 @@ After installation, run the setup wizard:
 /guardian:init
 ```
 
-This generates a `protection.json` configuration file in your project with sensible defaults. Customize it for your project's needs.
+This generates a `config.json` configuration file in your project with sensible defaults. Customize it for your project's needs.
 
 > If you skip setup, Guardian uses built-in defaults that protect common secret files (.env, *.pem, *.key) and block destructive commands. Run `/guardian:init` anytime to customize.
 
 ## Configuration
 
-Guardian uses a `protection.json` file for all settings, resolved in this order:
+Guardian uses a `config.json` file for all settings, resolved in this order:
 
-1. `$CLAUDE_PROJECT_DIR/.claude/guardian/protection.json` (project-specific)
-2. Plugin default (`assets/protection.default.json`) as fallback
+1. `$CLAUDE_PROJECT_DIR/.claude/guardian/config.json` (project-specific)
+2. Plugin default (`assets/guardian.default.json`) as fallback
 
-If neither is found, a hardcoded minimal protection set activates as an emergency fallback.
+If neither is found, a hardcoded minimal guardian ruleset activates as an emergency fallback.
 
 ### Example
 
-The following shows a partial custom configuration. See `assets/protection.default.json` for the complete config with all required fields.
+The following shows a partial custom configuration. See `assets/guardian.default.json` for the complete config with all required fields.
 
 ```json
 {
@@ -113,7 +113,7 @@ The following shows a partial custom configuration. See `assets/protection.defau
 | `allowedExternalPaths` | Paths outside the project allowed for writes |
 | `gitIntegration` | Auto-commit and git identity settings |
 
-See `assets/protection.schema.json` for the full schema.
+See `assets/guardian.schema.json` for the full schema.
 
 ## How It Works
 
@@ -121,9 +121,9 @@ Guardian registers four hooks with Claude Code:
 
 | Hook | Event | Script |
 |------|-------|--------|
-| Bash Protection | PreToolUse: Bash | Checks commands against block/ask patterns |
-| Edit Protection | PreToolUse: Edit | Validates file paths against access rules |
-| Write Protection | PreToolUse: Write | Validates file paths against access rules |
+| Bash Guardian | PreToolUse: Bash | Checks commands against block/ask patterns |
+| Edit Guardian | PreToolUse: Edit | Validates file paths against access rules |
+| Write Guardian | PreToolUse: Write | Validates file paths against access rules |
 | Auto-Commit | Stop | Commits pending changes as a checkpoint |
 
 All security hooks (Bash, Edit, Write) are **fail-closed**: if a hook times out or errors, the operation is **denied** rather than allowed through. A false denial is annoying; a false allow could be catastrophic. The Auto-Commit hook is fail-open by design -- a commit failure must never block session termination.

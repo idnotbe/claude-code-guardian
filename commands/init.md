@@ -1,11 +1,11 @@
 ---
 name: guardian:init
-description: Initialize Guardian protection for your project with smart defaults
+description: Initialize Guardian for your project with smart defaults
 ---
 
 # Guardian Setup Wizard
 
-You are the Guardian setup assistant. Your job is to create a tailored `protection.json` configuration that protects this project from destructive accidents while staying out of the developer's way.
+You are the Guardian setup assistant. Your job is to create a tailored `config.json` configuration that protects this project from destructive accidents while staying out of the developer's way.
 
 ## Philosophy
 
@@ -14,7 +14,7 @@ Be **opinionated on safety, flexible on workflow**. Detect the project type auto
 ## Step 1: Check for Existing Config
 
 Use the Glob tool to search for existing configuration:
-- `.claude/guardian/protection.json`
+- `.claude/guardian/config.json`
 
 If found, read it and ask the user: "You already have a Guardian config. Would you like me to review it for improvements, or start fresh?"
 
@@ -44,9 +44,9 @@ Then proceed with only the "Always" rules from Step 3.
 
 Also scan for:
 - `.env` files (any `.env*` pattern) -- these MUST be zero-access
-- `docker-compose*.yml` -- suggest noDelete protection
-- `.github/` or CI config -- suggest noDelete protection
-- Database migration directories (`migrations/`, `db/migrate/`, `alembic/`) -- suggest noDelete protection
+- `docker-compose*.yml` -- suggest noDelete guarding
+- `.github/` or CI config -- suggest noDelete guarding
+- Database migration directories (`migrations/`, `db/migrate/`, `alembic/`) -- suggest noDelete guarding
 
 Report what you found in a concise summary:
 
@@ -57,7 +57,7 @@ Report what you found in a concise summary:
 Start from the plugin's default config template:
 
 ```
-Read file: ${CLAUDE_PLUGIN_ROOT}/assets/protection.default.json
+Read file: ${CLAUDE_PLUGIN_ROOT}/assets/guardian.default.json
 ```
 
 Then apply project-specific customizations based on detection results:
@@ -106,7 +106,7 @@ Then apply project-specific customizations based on detection results:
 Show the user the generated config in a clear summary format. Do NOT dump raw JSON. Instead, present it as a categorized list:
 
 ```
-## Guardian Protection Summary
+## Guardian Summary
 
 ### Blocked Commands (always denied)
 - Root/system deletion (rm -rf /)
@@ -142,7 +142,7 @@ After confirmation, create the config:
 
 1. Create the guardian config directory if it does not exist
 2. Use the Write tool to save the finalized JSON to the guardian config path
-3. Validate the written file against `${CLAUDE_PLUGIN_ROOT}/assets/protection.schema.json`
+3. Validate the written file against `${CLAUDE_PLUGIN_ROOT}/assets/guardian.schema.json`
 
 ## Step 6: Confirm Success
 
@@ -151,7 +151,7 @@ Show a brief completion message:
 ```
 Guardian is now protecting your project.
 
-Config saved to: .claude/guardian/protection.json
+Config saved to: .claude/guardian/config.json
 
 Quick tips:
 - Say "block [command]" or "protect [file]" to modify rules anytime
@@ -161,10 +161,10 @@ Quick tips:
 
 ## Important Rules
 
-- Read the schema for validation: `${CLAUDE_PLUGIN_ROOT}/assets/protection.schema.json`
-- Default config template: `${CLAUDE_PLUGIN_ROOT}/assets/protection.default.json`
+- Read the schema for validation: `${CLAUDE_PLUGIN_ROOT}/assets/guardian.schema.json`
+- Default config template: `${CLAUDE_PLUGIN_ROOT}/assets/guardian.default.json`
 - NEVER overwrite an existing config without explicit user confirmation
-- NEVER store secrets in protection.json -- it protects secrets, it does not contain them
+- NEVER store secrets in config.json -- it protects secrets, it does not contain them
 - The config file SHOULD be committed to version control
 - Always use `version: "1.0.0"` for new configs
 - Keep `hookBehavior.onTimeout` and `hookBehavior.onError` as `"deny"` unless user explicitly requests otherwise -- fail-closed is the safe default

@@ -1,6 +1,6 @@
 {
-  "$schema": "./protection.schema.json",
-  "$comment": "Claude Code Guardian - Default Protection Configuration v1.0.0",
+  "$schema": "./guardian.schema.json",
+  "$comment": "Claude Code Guardian - Default Configuration v1.0.0",
   "version": "1.0.0",
   "hookBehavior": {
     "onTimeout": "deny",
@@ -65,6 +65,18 @@
       {
         "pattern": "(?i)eval\\s+['\"]?\\s*(?:rm|del|rmdir|shred)",
         "reason": "Eval with deletion command"
+      },
+      {
+        "pattern": "(?:py|python[23]?|python\\d[\\d.]*)\\s[^|&\\n]*(?:os\\.remove|os\\.unlink|shutil\\.rmtree|os\\.rmdir|pathlib\\.Path.*\\.unlink)",
+        "reason": "Interpreter file deletion — use rm/del for monitored deletion"
+      },
+      {
+        "pattern": "(?:node|deno|bun)\\s[^|&\\n]*(?:unlinkSync|rmSync|rmdirSync|fs\\.unlink|fs\\.rm\\b|promises\\.unlink)",
+        "reason": "Interpreter file deletion — use rm/del for monitored deletion"
+      },
+      {
+        "pattern": "(?:perl|ruby)\\s[^|&\\n]*(?:\\bunlink\\b|File\\.delete|FileUtils\\.rm)",
+        "reason": "Interpreter file deletion — use rm/del for monitored deletion"
       }
     ],
     "ask": [
@@ -119,10 +131,6 @@
       {
         "pattern": "mv\\s+\\S+\\s+(?:\\.\\.[\\\\/]|/tmp/)",
         "reason": "Moving outside project"
-      },
-      {
-        "pattern": "python\\s[^;|&]*?(?:os\\.remove|os\\.unlink|shutil\\.rmtree)",
-        "reason": "Python file deletion"
       },
       {
         "pattern": "(?i)drop\\s+(?:table|database|index|schema)",

@@ -1,8 +1,8 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "protection.schema.json",
-  "title": "Claude Code Hook Protection Configuration",
-  "description": "Security guardrails for Claude Code hooks - defines blocked patterns, protected paths, and git integration settings",
+  "$id": "guardian.schema.json",
+  "title": "Claude Code Guardian Configuration",
+  "description": "Security guardrails for Claude Code Guardian - defines blocked patterns, guarded paths, and git integration settings",
   "type": "object",
   "required": ["version", "hookBehavior", "bashToolPatterns"],
   "additionalProperties": false,
@@ -46,7 +46,7 @@
     },
     "bashToolPatterns": {
       "type": "object",
-      "description": "Regex patterns for bash command protection",
+      "description": "Regex patterns for bash command guarding",
       "additionalProperties": false,
       "properties": {
         "$comment": {
