@@ -12,7 +12,7 @@
   "plugins": [
     {
       "name": "claude-code-guardian",
-      "description": "Security guardrails - command protection, file access control, auto-commit safety",
+      "description": "Selective guardrails for --dangerously-skip-permissions -- blocks destructive commands, protects secrets, auto-commits checkpoints.",
       "version": "1.0.0",
       "author": {
         "name": "idnotbe",

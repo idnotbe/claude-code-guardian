@@ -1,7 +1,7 @@
 {
   "name": "claude-code-guardian",
   "version": "1.0.0",
-  "description": "Security guardrails for Claude Code - protects against destructive commands, unauthorized file access, and provides auto-commit safety nets",
+  "description": "Hook-based security guardrails for Claude Code's --dangerously-skip-permissions mode. Blocks destructive commands, protects secrets, and auto-commits safety checkpoints.",
   "author": {
     "name": "idnotbe",
     "url": "https://github.com/idnotbe"
