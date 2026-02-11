@@ -126,6 +126,11 @@ def extract_paths(command: str, project_dir: Path) -> list[Path]:
         log_protection("DEBUG", f"shlex.split failed ({e}), falling back to simple split")
         parts = command.split()
 
+    # COMPAT-03 FIX: shlex.split(posix=False) keeps surrounding quotes on Windows.
+    # Strip them so Path() receives clean paths.
+    if sys.platform == "win32":
+        parts = [p.strip("'\"") for p in parts]
+
     if not parts:
         return []
 
@@ -299,7 +304,9 @@ def archive_files(
             skipped_count += 1
         except OSError as e:
             # M3 FIX: Filesystem errors (disk full, path too long, etc.)
-            error_type = "DISK FULL" if e.errno == 28 else "FILESYSTEM ERROR"
+            # COMPAT-11 FIX: errno 28 (ENOSPC) is Linux; Windows uses winerror 112
+            is_disk_full = e.errno == 28 or getattr(e, "winerror", None) == 112
+            error_type = "DISK FULL" if is_disk_full else "FILESYSTEM ERROR"
             log_protection(
                 "WARN",
                 f"Archive {error_type} for {file_path.name}: {e}\n  errno={e.errno}",

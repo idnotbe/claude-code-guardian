@@ -52,11 +52,10 @@ These 5 assumptions must be verified in a real Claude Code environment before pu
 - **Impact**: First thing users try may not work
 - **Recommendation**: Verify against real Claude Code plugin CLI docs; lead with manual install
 
-#### COMPAT-03: shlex.split quote handling on Windows
-- **File**: hooks/scripts/bash_protection.py (lines 122-123)
-- **Issue**: shlex.split(posix=False) does not strip surrounding quotes from tokens on Windows
-- **Impact**: Path extraction may miss quoted paths in bash commands on Windows
-- **Fix**: After shlex.split with posix=False, strip quotes from each part
+#### ~~COMPAT-03: shlex.split quote handling on Windows~~ FIXED
+- **File**: hooks/scripts/bash_protection.py
+- **Issue**: shlex.split(posix=False) did not strip surrounding quotes from tokens on Windows
+- **Fix**: Added quote stripping after shlex.split on Windows (v1.0.1)
 
 #### COMPAT-04: LC_ALL=C on non-MSYS2 Windows git
 - **File**: hooks/scripts/_protection_utils.py (lines 1452-1465)
@@ -81,9 +80,9 @@ These 5 assumptions must be verified in a real Claude Code environment before pu
 
 ### LOW Severity
 
-#### UX-08: Default blocks --force-with-lease
-- **Issue**: --force-with-lease (safe force push) is blocked alongside --force
-- **Recommendation**: Move --force-with-lease from block to ask
+#### ~~UX-08: Default blocks --force-with-lease~~ FIXED
+- **Issue**: --force-with-lease (safe force push) was blocked alongside --force
+- **Fix**: Moved --force-with-lease from block to ask patterns (v1.0.1)
 
 #### UX-09: Schema reference common patterns note
 - **Issue**: Common patterns table lists defaults without noting they are pre-included
@@ -100,8 +99,9 @@ These 5 assumptions must be verified in a real Claude Code environment before pu
 #### COMPAT-08: Relative $schema in default config
 - **Issue**: $schema uses relative path which breaks when copied to user project
 
-#### COMPAT-11: errno 28 disk full check is Linux-specific
-- **Issue**: e.errno == 28 is ENOSPC on Linux; Windows uses winerror 112
+#### ~~COMPAT-11: errno 28 disk full check is Linux-specific~~ FIXED
+- **Issue**: e.errno == 28 was ENOSPC on Linux only; Windows uses winerror 112
+- **Fix**: Added `getattr(e, 'winerror', None) == 112` check (v1.0.1)
 
 #### COMPAT-12: Hypothetical marketplace schema URL
 - **Status**: Cosmetic only -- no runtime impact
@@ -123,6 +123,9 @@ These 5 assumptions must be verified in a real Claude Code environment before pu
 | MEDIUM-03 | MEDIUM | .gitignore wrong log filename | Round 1 |
 | COMPAT-01 | HIGH | plugin.json missing skills/agents | Round 2 |
 | COMPAT-02 | HIGH | python vs python3 in hooks.json | Round 2 |
+| COMPAT-03 | MEDIUM | shlex.split Windows quote handling | v1.0.1 |
+| COMPAT-11 | LOW | errno 28 disk full Linux-only | v1.0.1 |
+| UX-08 | LOW | --force-with-lease blocked instead of ask | v1.0.1 |
 | UX-01 | HIGH | SKILL.md vague config paths | Round 2 |
 | UX-03 | MEDIUM | No skip-init guidance | Round 2 |
 | UX-04 | MEDIUM | Inconsistent fail-closed terminology | Round 2 |

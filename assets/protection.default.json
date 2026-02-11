@@ -27,8 +27,8 @@
         "reason": "Backup archive deletion"
       },
       {
-        "pattern": "git\\s+push\\s+(?:--force(?:-with-lease)?|-f)",
-        "reason": "Force push to remote (includes --force-with-lease)"
+        "pattern": "git\\s+push\\s+(?:--force(?!-with-lease)|-f)",
+        "reason": "Force push to remote (destructive)"
       },
       {
         "pattern": "git\\s+filter-branch",
@@ -95,6 +95,10 @@
       {
         "pattern": "git\\s+stash\\s+drop",
         "reason": "Drop stash entry"
+      },
+      {
+        "pattern": "git\\s+push\\s+--force-with-lease",
+        "reason": "Force push with lease (safer but still overwrites remote)"
       },
       {
         "pattern": "git\\s+branch\\s+-[dD]",
