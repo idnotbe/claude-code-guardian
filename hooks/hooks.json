@@ -1,0 +1,23 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/bash_protection.py\""
+      },
+      {
+        "matcher": "Edit",
+        "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/edit_protection.py\""
+      },
+      {
+        "matcher": "Write",
+        "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/write_protection.py\""
+      }
+    ],
+    "Stop": [
+      {
+        "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/auto_commit.py\""
+      }
+    ]
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "name": "claude-code-guardian",
+  "version": "1.0.0",
+  "description": "Security guardrails for Claude Code - protects against destructive commands, unauthorized file access, and provides auto-commit safety nets",
+  "author": {
+    "name": "agntpod",
+    "url": "https://github.com/agntpod"
+  },
+  "hooks": "./hooks/hooks.json",
+  "commands": [
+    "./commands/init.md"
+  ],
+  "skills": [
+    "./skills/config-guide/SKILL.md"
+  ],
+  "agents": [
+    "./agents/config-assistant.md"
+  ],
+  "homepage": "https://github.com/agntpod/claude-code-guardian",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/agntpod/claude-code-guardian.git"
+  },
+  "license": "MIT",
+  "keywords": [
+    "security",
+    "protection",
+    "guardrails",
+    "hooks",
+    "safety"
+  ],
+  "engines": {
+    "claude-code": ">=1.0.0",
+    "python": ">=3.10"
+  }
+}

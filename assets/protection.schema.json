@@ -1,0 +1,181 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "protection.schema.json",
+  "title": "Claude Code Hook Protection Configuration",
+  "description": "Security guardrails for Claude Code hooks - defines blocked patterns, protected paths, and git integration settings",
+  "type": "object",
+  "required": ["version", "hookBehavior", "bashToolPatterns"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "JSON Schema reference"
+    },
+    "$comment": {
+      "type": "string",
+      "description": "Configuration file description and version notes"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Semantic version of this configuration (e.g., '2.4.0')"
+    },
+    "hookBehavior": {
+      "type": "object",
+      "description": "Default behavior when hooks encounter errors or timeouts",
+      "required": ["onTimeout", "onError", "timeoutSeconds"],
+      "additionalProperties": false,
+      "properties": {
+        "onTimeout": {
+          "type": "string",
+          "enum": ["allow", "deny", "ask"],
+          "description": "Action when hook times out"
+        },
+        "onError": {
+          "type": "string",
+          "enum": ["allow", "deny", "ask"],
+          "description": "Action when hook encounters an error"
+        },
+        "timeoutSeconds": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 60,
+          "description": "Maximum seconds before hook times out"
+        }
+      }
+    },
+    "bashToolPatterns": {
+      "type": "object",
+      "description": "Regex patterns for bash command protection",
+      "additionalProperties": false,
+      "properties": {
+        "$comment": {
+          "type": "string",
+          "description": "Documentation for pattern syntax"
+        },
+        "block": {
+          "type": "array",
+          "description": "Patterns that are always blocked (no user prompt)",
+          "items": {
+            "$ref": "#/$defs/patternRule"
+          }
+        },
+        "ask": {
+          "type": "array",
+          "description": "Patterns that require user confirmation",
+          "items": {
+            "$ref": "#/$defs/patternRule"
+          }
+        }
+      }
+    },
+    "zeroAccessPaths": {
+      "type": "array",
+      "description": "Glob patterns for files that cannot be read or written (secrets, credentials)",
+      "items": {
+        "type": "string"
+      }
+    },
+    "readOnlyPaths": {
+      "type": "array",
+      "description": "Glob patterns for files that can be read but not written",
+      "items": {
+        "type": "string"
+      }
+    },
+    "noDeletePaths": {
+      "type": "array",
+      "description": "Glob patterns for files that cannot be deleted",
+      "items": {
+        "type": "string"
+      }
+    },
+    "allowedExternalPaths": {
+      "type": "array",
+      "description": "Glob patterns for paths outside the project that are allowed for write operations. Supports ~ expansion and ** recursive matching. Only bypasses the 'outside project' check — zeroAccess, readOnly, and symlink checks still apply.",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "gitIntegration": {
+      "type": "object",
+      "description": "Git auto-commit and identity settings",
+      "additionalProperties": false,
+      "properties": {
+        "autoCommit": {
+          "type": "object",
+          "description": "Auto-commit configuration",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable auto-commit on session stop"
+            },
+            "onStop": {
+              "type": "boolean",
+              "description": "Commit when session stops"
+            },
+            "messagePrefix": {
+              "type": "string",
+              "description": "Prefix for auto-commit messages"
+            },
+            "includeUntracked": {
+              "type": "boolean",
+              "description": "Include untracked files in auto-commits"
+            }
+          }
+        },
+        "preCommitOnDangerous": {
+          "type": "object",
+          "description": "Pre-commit before dangerous operations",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable pre-danger checkpoint commits"
+            },
+            "messagePrefix": {
+              "type": "string",
+              "description": "Prefix for pre-danger commit messages"
+            }
+          }
+        },
+        "identity": {
+          "type": "object",
+          "description": "Git identity for auto-commits",
+          "additionalProperties": false,
+          "properties": {
+            "email": {
+              "type": "string",
+              "format": "email",
+              "description": "Git author email"
+            },
+            "name": {
+              "type": "string",
+              "description": "Git author name"
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "patternRule": {
+      "type": "object",
+      "description": "A regex pattern with reason for blocking/asking",
+      "required": ["pattern", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "description": "Regex pattern to match against bash commands"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Human-readable reason for this rule"
+        }
+      }
+    }
+  }
+}

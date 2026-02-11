@@ -1,0 +1,232 @@
+{
+  "$schema": "./protection.schema.json",
+  "$comment": "Claude Code Guardian - Default Protection Configuration v1.0.0",
+  "version": "1.0.0",
+  "hookBehavior": {
+    "onTimeout": "deny",
+    "onError": "deny",
+    "timeoutSeconds": 10
+  },
+  "bashToolPatterns": {
+    "$comment": "Patterns use (?i) prefix for case-insensitivity where needed",
+    "block": [
+      {
+        "pattern": "rm\\s+-[rRf]+\\s+/(?:\\s*$|\\*)",
+        "reason": "Root or full system deletion"
+      },
+      {
+        "pattern": "(?i)(?:rm|rmdir|del|remove-item).*\\.git(?:\\s|/|$)",
+        "reason": "Git repository deletion"
+      },
+      {
+        "pattern": "(?i)(?:rm|rmdir|del|remove-item).*\\.claude(?:\\s|/|$)",
+        "reason": "Claude configuration deletion"
+      },
+      {
+        "pattern": "(?i)(?:rm|rmdir|del|remove-item).*_archive(?:\\s|/|$)",
+        "reason": "Backup archive deletion"
+      },
+      {
+        "pattern": "git\\s+push\\s+(?:--force(?:-with-lease)?|-f)",
+        "reason": "Force push to remote (includes --force-with-lease)"
+      },
+      {
+        "pattern": "git\\s+filter-branch",
+        "reason": "History rewriting"
+      },
+      {
+        "pattern": "git\\s+reflog\\s+(?:expire|delete)",
+        "reason": "Reflog history destruction (irreversible)"
+      },
+      {
+        "pattern": "(?i)find\\s+.*\\s+-delete",
+        "reason": "Find with delete action"
+      },
+      {
+        "pattern": "shred\\s+",
+        "reason": "Secure file destruction"
+      },
+      {
+        "pattern": "(?:curl|wget)[^|]*\\|\\s*(?:bash|sh|zsh|python|perl|ruby|node)",
+        "reason": "Remote script execution (pipe to interpreter)"
+      },
+      {
+        "pattern": ":\\s*\\(\\s*\\)\\s*\\{[^}]{0,200}\\}\\s*;\\s*:",
+        "reason": "Fork bomb (shell function variant)"
+      },
+      {
+        "pattern": "\\$\\([^)]*(?:rm|del|rmdir|shred)[^)]*\\)",
+        "reason": "Command substitution with deletion"
+      },
+      {
+        "pattern": "`[^`]*(?:rm|del|rmdir|shred)[^`]*`",
+        "reason": "Backtick substitution with deletion"
+      },
+      {
+        "pattern": "(?i)eval\\s+['\"]?\\s*(?:rm|del|rmdir|shred)",
+        "reason": "Eval with deletion command"
+      }
+    ],
+    "ask": [
+      {
+        "pattern": "rm\\s+-[rRf]+",
+        "reason": "Recursive/force deletion"
+      },
+      {
+        "pattern": "(?i)del\\s+(?:/[sq]\\s+)*",
+        "reason": "Windows delete command"
+      },
+      {
+        "pattern": "(?i)remove-item\\s+",
+        "reason": "PowerShell removal"
+      },
+      {
+        "pattern": "git\\s+reset\\s+--hard",
+        "reason": "Hard reset (discards changes)"
+      },
+      {
+        "pattern": "git\\s+clean\\s+-[fdxX]+",
+        "reason": "Git clean (removes files)"
+      },
+      {
+        "pattern": "git\\s+checkout\\s+--\\s+\\.",
+        "reason": "Discard all changes"
+      },
+      {
+        "pattern": "git\\s+stash\\s+drop",
+        "reason": "Drop stash entry"
+      },
+      {
+        "pattern": "git\\s+branch\\s+-[dD]",
+        "reason": "Branch deletion"
+      },
+      {
+        "pattern": "truncate\\s+",
+        "reason": "File truncation"
+      },
+      {
+        "pattern": "mv\\s+['\"]?(?:\\./)?\\.(env|git|claude)",
+        "reason": "Moving protected files"
+      },
+      {
+        "pattern": "mv\\s+['\"]?CLAUDE\\.md",
+        "reason": "Moving Claude documentation"
+      },
+      {
+        "pattern": "mv\\s+\\S+\\s+(?:\\.\\.[\\\\/]|/tmp/)",
+        "reason": "Moving outside project"
+      },
+      {
+        "pattern": "python\\s[^;|&]*?(?:os\\.remove|os\\.unlink|shutil\\.rmtree)",
+        "reason": "Python file deletion"
+      },
+      {
+        "pattern": "(?i)drop\\s+(?:table|database|index|schema)",
+        "reason": "SQL DROP command"
+      },
+      {
+        "pattern": "(?i)truncate\\s+table",
+        "reason": "SQL TRUNCATE"
+      },
+      {
+        "pattern": "(?i)delete\\s+from\\s+\\w+(?:\\s*;|\\s*$|\\s+--)",
+        "reason": "SQL DELETE without WHERE (with or without semicolon)"
+      }
+    ]
+  },
+  "zeroAccessPaths": [
+    ".env",
+    ".env.*",
+    ".env*.local",
+    "*.env",
+    "*.pem",
+    "*.key",
+    "*.pfx",
+    "*.p12",
+    "id_rsa",
+    "id_rsa.*",
+    "id_ed25519",
+    "id_ed25519.*",
+    "~/.ssh/**",
+    "~/.gnupg/**",
+    "~/.aws/**",
+    "~/.config/gcloud/**",
+    "~/.azure/**",
+    "~/.kube/**",
+    "*credentials*.json",
+    "*serviceAccount*.json",
+    "firebase-adminsdk*.json",
+    "*.tfstate",
+    "*.tfstate.backup",
+    ".terraform/**",
+    "secrets.yaml",
+    "secrets.yml",
+    "secrets.json"
+  ],
+  "readOnlyPaths": [
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "poetry.lock",
+    "Pipfile.lock",
+    "Cargo.lock",
+    "Gemfile.lock",
+    "composer.lock",
+    "go.sum",
+    "*.lock",
+    "node_modules/**",
+    "dist/**",
+    "build/**",
+    "__pycache__/**",
+    ".venv/**",
+    "venv/**",
+    "target/**",
+    "vendor/**"
+  ],
+  "noDeletePaths": [
+    ".gitignore",
+    ".gitattributes",
+    ".gitmodules",
+    "CLAUDE.md",
+    "LICENSE",
+    "LICENSE.*",
+    "README.md",
+    "README.*",
+    "CONTRIBUTING.md",
+    "CHANGELOG.md",
+    "SECURITY.md",
+    ".github/**",
+    ".gitlab-ci.yml",
+    "Jenkinsfile",
+    ".circleci/**",
+    "azure-pipelines.yml",
+    "Dockerfile",
+    "Dockerfile.*",
+    "docker-compose*.yml",
+    "docker-compose*.yaml",
+    ".dockerignore",
+    "Makefile",
+    "pyproject.toml",
+    "package.json",
+    "tsconfig.json",
+    "Cargo.toml",
+    "go.mod"
+  ],
+  "allowedExternalPaths": [],
+  "gitIntegration": {
+    "autoCommit": {
+      "enabled": true,
+      "onStop": true,
+      "messagePrefix": "auto-checkpoint",
+      "includeUntracked": false
+    },
+    "preCommitOnDangerous": {
+      "enabled": true,
+      "messagePrefix": "pre-danger-checkpoint"
+    },
+    "identity": {
+      "email": "guardian@claude-code.local",
+      "name": "Guardian Auto-Commit"
+    }
+  }
+}
