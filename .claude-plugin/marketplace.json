@@ -1,12 +1,12 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
-  "name": "agntpod-security",
+  "name": "idnotbe-security",
   "owner": {
-    "name": "agntpod",
-    "url": "https://github.com/agntpod"
+    "name": "idnotbe",
+    "url": "https://github.com/idnotbe"
   },
   "metadata": {
-    "description": "Security-focused plugins for Claude Code by agntpod",
+    "description": "Security-focused plugins for Claude Code by idnotbe",
     "version": "1.0.0"
   },
   "plugins": [
@@ -15,12 +15,12 @@
       "description": "Security guardrails - command protection, file access control, auto-commit safety",
       "version": "1.0.0",
       "author": {
-        "name": "agntpod",
-        "url": "https://github.com/agntpod"
+        "name": "idnotbe",
+        "url": "https://github.com/idnotbe"
       },
       "source": ".",
       "category": "security",
-      "homepage": "https://github.com/agntpod/claude-code-guardian",
+      "homepage": "https://github.com/idnotbe/claude-code-guardian",
       "tags": [
         "security",
         "hooks",
