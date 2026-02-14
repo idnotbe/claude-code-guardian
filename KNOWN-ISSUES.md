@@ -83,6 +83,12 @@ These 5 assumptions must be verified in a real Claude Code environment before pu
 - **Impact**: Users may expect files in noDeletePaths are fully protected, but only bash `rm`-style deletion is blocked.
 - **Status**: By-design limitation. Edit/Write hooks check zeroAccessPaths, readOnlyPaths, symlink escapes, and self-guarding.
 
+#### SCOPE-02: hookBehavior.timeoutSeconds not enforced at hook level
+- **File**: hooks/scripts/bash_guardian.py (line ~1235 TODO comment)
+- **Issue**: `hookBehavior.timeoutSeconds` is defined in the config schema and returned by `get_hook_behavior()`, but is not enforced as a blanket timeout on hook execution. Individual subprocess calls have their own timeouts (5-30s), but the overall hook has no time limit.
+- **Impact**: Users may configure `timeoutSeconds` expecting it to limit hook execution time, but it has no runtime effect.
+- **Status**: By-design limitation. Wrapping hook execution with `with_timeout()` risks git state corruption (SIGALRM interrupting subprocess mid-write), partial archive file copies, and Windows threading race conditions. Individual subprocess timeouts provide sufficient protection.
+
 ### LOW Severity
 
 #### ~~UX-08: Default blocks --force-with-lease~~ FIXED
@@ -131,24 +137,24 @@ These 5 assumptions must be verified in a real Claude Code environment before pu
 
 | ID | Severity | Description | Fixed In |
 |----|----------|-------------|----------|
-| F-01 | CRITICAL | bash_guardian.py fail-open on crash | Round 1 |
-| F-02 | HIGH | Oversized command bypass (padding attack) | Round 1 |
-| CRITICAL-01 | CRITICAL | README documented non-existent config step | Round 1 |
-| HIGH-01 | HIGH | marketplace.json wrong $schema key | Round 1 |
-| MEDIUM-02 | MEDIUM | Korean comments in committed code | Round 1 |
-| MEDIUM-03 | MEDIUM | .gitignore wrong log filename | Round 1 |
-| COMPAT-01 | HIGH | plugin.json missing skills/agents | Round 2 |
-| COMPAT-02 | HIGH | python vs python3 in hooks.json | Round 2 |
-| COMPAT-03 | MEDIUM | shlex.split Windows quote handling | v1.0.1 |
-| COMPAT-11 | LOW | errno 28 disk full Linux-only | v1.0.1 |
-| UX-08 | LOW | --force-with-lease blocked instead of ask | v1.0.1 |
-| UX-01 | HIGH | SKILL.md vague config paths | Round 2 |
-| UX-03 | MEDIUM | No skip-init guidance | Round 2 |
-| UX-04 | MEDIUM | Inconsistent fail-closed terminology | Round 2 |
-| UX-05 | MEDIUM | No fallback for unrecognized projects | Round 2 |
-| UX-06 | MEDIUM | Legacy path check in init wizard | Round 2 |
-| UX-12 | LOW | init.md quick tips depend on skill/agent | Round 2 |
-| COMPAT-06 | MEDIUM | normalize_path resolves against CWD | Unreleased |
-| COMPAT-07 | MEDIUM | fnmatch case sensitivity on macOS | Unreleased |
-| COMPAT-08 | LOW | Relative $schema in default config | Unreleased |
-| COMPAT-13 | LOW | Recovery guidance uses del on all platforms | Unreleased |
+| F-01 | CRITICAL | bash_guardian.py failed open on unhandled crash, allowing commands through without checks | Round 1 |
+| F-02 | HIGH | Oversized command could bypass pattern matching via padding attack | Round 1 |
+| CRITICAL-01 | CRITICAL | README documented a configuration step that did not exist in the codebase | Round 1 |
+| HIGH-01 | HIGH | marketplace.json used wrong `$schema` key format | Round 1 |
+| MEDIUM-02 | MEDIUM | Korean-language comments left in committed production code | Round 1 |
+| MEDIUM-03 | MEDIUM | .gitignore referenced wrong log filename, leaving actual logs unignored | Round 1 |
+| COMPAT-01 | HIGH | plugin.json missing skills and agents declarations, preventing discovery | Round 2 |
+| COMPAT-02 | HIGH | hooks.json used `python` instead of `python3`, failing on Linux/WSL systems | Round 2 |
+| COMPAT-03 | MEDIUM | shlex.split(posix=False) did not strip surrounding quotes on Windows | v1.0.1 |
+| COMPAT-11 | LOW | errno 28 disk-full check was Linux-specific; Windows uses winerror 112 | v1.0.1 |
+| UX-08 | LOW | --force-with-lease (safe force push) was blocked instead of prompting ask | v1.0.1 |
+| UX-01 | HIGH | SKILL.md referenced vague config paths that did not match actual file locations | Round 2 |
+| UX-03 | MEDIUM | No guidance for skipping /guardian:init wizard when manually configuring | Round 2 |
+| UX-04 | MEDIUM | Inconsistent fail-closed terminology across documentation and code comments | Round 2 |
+| UX-05 | MEDIUM | No fallback behavior defined for unrecognized project types in init wizard | Round 2 |
+| UX-06 | MEDIUM | Init wizard checked for legacy config path that no longer existed | Round 2 |
+| UX-12 | LOW | init.md quick tips referenced skill/agent before they were registered in plugin.json | Round 2 |
+| COMPAT-06 | MEDIUM | normalize_path() resolved relative paths against CWD instead of project directory | Unreleased |
+| COMPAT-07 | MEDIUM | fnmatch case sensitivity incorrect on macOS HFS+ (case-insensitive filesystem) | Unreleased |
+| COMPAT-08 | LOW | Relative `$schema` path in default config broke when config copied to project | Unreleased |
+| COMPAT-13 | LOW | Circuit breaker recovery guidance suggested Windows `del` command on all platforms | Unreleased |

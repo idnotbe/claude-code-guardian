@@ -81,7 +81,7 @@ After installation, run the setup wizard:
 /guardian:init
 ```
 
-This generates a `config.json` configuration file in your project with sensible defaults. Customize it for your project's needs.
+This generates a `config.json` configuration file in your project with built-in defaults. Customize it for your project's needs.
 
 > If you skip setup, Guardian uses built-in defaults that protect common secret files (.env, *.pem, *.key) and block destructive commands. Run `/guardian:init` anytime to customize.
 
@@ -98,7 +98,7 @@ If neither is found, a hardcoded minimal guardian ruleset activates as an emerge
 
 ### Example
 
-The following shows a partial custom configuration. Your config must also include `version` and `hookBehavior` (both required by the schema). See `assets/guardian.default.json` for the complete config with all required fields.
+> **Note**: The example below is a partial configuration showing only custom patterns. A valid config file **must** also include `version` and `hookBehavior`. Copy `assets/guardian.default.json` as your starting point and modify from there.
 
 ```json
 {
@@ -150,7 +150,7 @@ All security hooks (Bash, Read, Edit, Write) are **fail-closed**: if a hook time
 
 Guardian also protects its own configuration file (`.claude/guardian/config.json`) from being modified by the AI agent.
 
-> **Important**: If Guardian fails to load while `--dangerously-skip-permissions` is active, you have zero protection. Verify hooks are loaded at the start of your session by attempting to read a `.env` file -- Guardian should block the operation. If it doesn't, hooks are not active. See [Failure Modes](#failure-modes) for details.
+> **Important**: If Guardian fails to load while `--dangerously-skip-permissions` is active, you have zero protection. Verify hooks are loaded at the start of your session by running a blocked command -- for example, ask Claude to `cat .env` (even if the file doesn't exist, Guardian should block the attempt). If it doesn't, hooks are not active. See [Failure Modes](#failure-modes) for details.
 
 ### How "ask" works in permissionless mode
 
@@ -182,7 +182,7 @@ Use Guardian alongside git backups, CI/CD checks, and standard access controls -
 
 **Log file location**: Guardian logs to `.claude/guardian/guardian.log` (inside your project directory). Check this file for detailed information about hook decisions, blocked operations, and errors.
 
-**Checking if hooks are loaded**: At the start of your session, try to read a `.env` file or run a known-blocked command like `cat .env`. If Guardian is active, the operation will be blocked. If it succeeds silently, hooks are not loaded.
+**Checking if hooks are loaded**: At the start of your session, run a known-blocked command like `cat .env` (the file does not need to exist -- Guardian intercepts the command before it executes). If Guardian is active, the operation will be blocked. If it succeeds silently, hooks are not loaded.
 
 **Common issues**:
 

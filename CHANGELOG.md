@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - KNOWN-ISSUES: Updated UX-11 title to reflect current state (dry-run documented in README)
 - KNOWN-ISSUES: Fleshed out terse entries (UX-09, UX-10, COMPAT-12) with file paths and actionable detail
 - KNOWN-ISSUES: Marked UX-12 as fixed with consistent strikethrough formatting
+- KNOWN-ISSUES: Added SCOPE-02 documenting hookBehavior.timeoutSeconds as a by-design limitation
 
 ### Fixed
 - `evaluate_rules()` now returns deny on internal error instead of fail-open allow
