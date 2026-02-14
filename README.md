@@ -17,15 +17,17 @@ You keep the speed. You lose the existential dread.
 **Safety checkpoints** (automatic):
 - Auto-commits pending changes when a Claude Code session ends
 - Creates a commit before any destructive operation, so you can always roll back
+- Archives untracked files to `_archive/` before deletion, so nothing is permanently lost without a copy
 - Your work is never more than one `git reset` away from recovery
 
 **Hard blocks** (always denied):
 - `rm -rf /`, fork bombs, and other catastrophic shell commands
 - Reading `.env`, `.pem`, SSH keys, and other secret files
 - Writing to protected paths outside your project
-- `git push --force` and `--force-with-lease` (configure to allow if needed)
+- `git push --force` (configure to allow if needed)
 
 **Confirmation prompts** (asks before proceeding):
+- `git push --force-with-lease`
 - `git reset --hard`, branch deletion
 - Other risky-but-sometimes-intentional operations
 
@@ -40,23 +42,36 @@ Default patterns cover both Unix and Windows commands.
 
 ### Manual Installation
 
+> **Requires Python 3.10+** and Git. Verify with `python3 --version` and `git --version` before installing.
+
 ```bash
 git clone https://github.com/idnotbe/claude-code-guardian
 claude --plugin-dir /path/to/claude-code-guardian
 ```
 
-> **Persistence**: The `--plugin-dir` flag applies to a single session. To load Guardian automatically, add it to your shell profile or Claude Code settings.
+> **Persistence**: The `--plugin-dir` flag applies to a single session. To load Guardian automatically, add to your shell profile:
+> ```bash
+> # ~/.bashrc or ~/.zshrc
+> alias claude='claude --plugin-dir /path/to/claude-code-guardian'
+> ```
 
 To update, run `git pull` in the cloned directory.
 
 ### From Marketplace
 
-> Marketplace integration is currently experimental. Manual installation is the reliable path.
+> **Unverified**: Marketplace integration is currently experimental and these commands have not been tested against a live Claude Code plugin CLI. Manual installation (above) is the reliable path.
+
+The following are two alternative syntaxes that may work depending on your Claude Code version:
 
 ```bash
+# Alternative A: marketplace add
 /plugin marketplace add idnotbe/claude-code-guardian
+
+# Alternative B: direct install
 /plugin install claude-code-guardian@idnotbe-security
 ```
+
+See [UX-07 in KNOWN-ISSUES.md](KNOWN-ISSUES.md) for details.
 
 ## Setup
 
@@ -70,6 +85,8 @@ This generates a `config.json` configuration file in your project with sensible 
 
 > If you skip setup, Guardian uses built-in defaults that protect common secret files (.env, *.pem, *.key) and block destructive commands. Run `/guardian:init` anytime to customize.
 
+> **Tip**: To test your configuration without blocking operations, use dry-run mode: `CLAUDE_HOOK_DRY_RUN=1`. See [Disabling Guardian](#disabling-guardian) for details.
+
 ## Configuration
 
 Guardian uses a `config.json` file for all settings, resolved in this order:
@@ -81,7 +98,7 @@ If neither is found, a hardcoded minimal guardian ruleset activates as an emerge
 
 ### Example
 
-The following shows a partial custom configuration. See `assets/guardian.default.json` for the complete config with all required fields.
+The following shows a partial custom configuration. Your config must also include `version` and `hookBehavior` (both required by the schema). See `assets/guardian.default.json` for the complete config with all required fields.
 
 ```json
 {
@@ -104,7 +121,8 @@ The following shows a partial custom configuration. See `assets/guardian.default
 
 | Section | Purpose |
 |---------|---------|
-| `hookBehavior` | What to do on timeout or error (allow/deny/ask) |
+| `version` | Config version (semver, required) |
+| `hookBehavior` | Timeout and error handling: what to do on hook timeout or error (`allow`/`deny`/`ask`), and `timeoutSeconds` for hook execution limit |
 | `bashToolPatterns.block` | Regex patterns always blocked |
 | `bashToolPatterns.ask` | Regex patterns requiring confirmation |
 | `zeroAccessPaths` | Glob patterns for files that cannot be read or written |
@@ -112,21 +130,25 @@ The following shows a partial custom configuration. See `assets/guardian.default
 | `noDeletePaths` | Glob patterns for files that cannot be deleted |
 | `allowedExternalPaths` | Paths outside the project allowed for writes |
 | `gitIntegration` | Auto-commit and git identity settings |
+| `bashPathScan` | Scans bash commands for references to protected path names (e.g., catches `python3 script.py --file .env`). Supports `scanTiers` to control which path types to scan for |
 
 See `assets/guardian.schema.json` for the full schema.
 
 ## How It Works
 
-Guardian registers four hooks with Claude Code:
+Guardian registers five hooks with Claude Code:
 
 | Hook | Event | Script |
 |------|-------|--------|
 | Bash Guardian | PreToolUse: Bash | Checks commands against block/ask patterns |
+| Read Guardian | PreToolUse: Read | Blocks reading secret files and paths outside project |
 | Edit Guardian | PreToolUse: Edit | Validates file paths against access rules |
 | Write Guardian | PreToolUse: Write | Validates file paths against access rules |
 | Auto-Commit | Stop | Commits pending changes as a checkpoint |
 
-All security hooks (Bash, Edit, Write) are **fail-closed**: if a hook times out or errors, the operation is **denied** rather than allowed through. A false denial is annoying; a false allow could be catastrophic. The Auto-Commit hook is fail-open by design -- a commit failure must never block session termination.
+All security hooks (Bash, Read, Edit, Write) are **fail-closed**: if a hook times out or errors, the operation is **denied** rather than allowed through. A false denial is annoying; a false allow could be catastrophic. The Auto-Commit hook is fail-open by design -- a commit failure must never block session termination.
+
+Guardian also protects its own configuration file (`.claude/guardian/config.json`) from being modified by the AI agent.
 
 > **Important**: If Guardian fails to load while `--dangerously-skip-permissions` is active, you have zero protection. Verify hooks are loaded at the start of your session by attempting to read a `.env` file -- Guardian should block the operation. If it doesn't, hooks are not active. See [Failure Modes](#failure-modes) for details.
 
@@ -142,7 +164,7 @@ This is the inherent trade-off of hook-based interception: it only works when it
 
 **Does not protect against:**
 - Determined human adversaries crafting bypass commands
-- Shell commands inside Python scripts (e.g., `subprocess.run()`) -- only direct Bash tool calls are intercepted
+- Arbitrary code within interpreter scripts (Guardian blocks known deletion APIs like `os.remove` and `shutil.rmtree` at the Bash command level, but cannot catch all possible code patterns)
 - Operations run in a separate terminal or process outside Claude Code
 - Its own failure to load or initialize
 
@@ -154,9 +176,49 @@ This is the inherent trade-off of hook-based interception: it only works when it
 
 Use Guardian alongside git backups, CI/CD checks, and standard access controls -- not instead of them.
 
+**Circuit breaker**: If auto-commit fails repeatedly, Guardian stops attempting auto-commits to prevent cascading failures. The circuit breaker auto-resets after one hour. To manually reset, delete `.claude/guardian/.circuit_open`.
+
+### Troubleshooting
+
+**Log file location**: Guardian logs to `.claude/guardian/guardian.log` (inside your project directory). Check this file for detailed information about hook decisions, blocked operations, and errors.
+
+**Checking if hooks are loaded**: At the start of your session, try to read a `.env` file or run a known-blocked command like `cat .env`. If Guardian is active, the operation will be blocked. If it succeeds silently, hooks are not loaded.
+
+**Common issues**:
+
+| Problem | Cause | Solution |
+|---------|-------|----------|
+| Hooks not firing | `--plugin-dir` not set or wrong path | Verify path: `claude --plugin-dir /path/to/claude-code-guardian` |
+| `python3: command not found` | Python 3.10+ not installed or not on PATH | Install Python 3.10+ and ensure `python3` is available |
+| Config not loading | Syntax error in `config.json` | Validate against schema: compare with `assets/guardian.default.json` |
+| Auto-commits stopped | Circuit breaker tripped after failures | Delete `.claude/guardian/.circuit_open` or wait 1 hour for auto-reset |
+| Unexpected blocks | Custom config too restrictive | Use dry-run mode to debug: `CLAUDE_HOOK_DRY_RUN=1` (see below) |
+
 ### Disabling Guardian
 
+To test Guardian without blocking, set `CLAUDE_HOOK_DRY_RUN=1` in your environment. Hooks will log what they would do without actually blocking operations. This is useful for testing configuration changes or debugging unexpected blocks.
+
+```bash
+CLAUDE_HOOK_DRY_RUN=1 claude --plugin-dir /path/to/claude-code-guardian
+```
+
 To temporarily disable Guardian, remove the `--plugin-dir` flag from your launch command. To uninstall, delete the cloned repository and remove any references from your Claude Code settings. If you ran `/guardian:init`, also remove the `.claude/guardian/` directory from your project.
+
+## Testing
+
+The test suite covers bash_guardian.py and _guardian_utils.py extensively, with ~1,009 test methods across 6 category directories.
+
+```bash
+# Run core and security tests (unittest-based, pytest-compatible)
+python -m pytest tests/core/ tests/security/ -v
+
+# Run a single test file directly
+python3 tests/core/test_p0p1_comprehensive.py
+```
+
+See `tests/README.md` for detailed test documentation including directory structure, category boundaries, and how to add new tests.
+
+**Known coverage gaps**: `edit_guardian.py`, `read_guardian.py`, `write_guardian.py`, and `auto_commit.py` currently have no automated tests. See `TEST-PLAN.md` for the prioritized action plan.
 
 ## Requirements
 

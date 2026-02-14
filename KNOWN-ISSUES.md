@@ -1,7 +1,7 @@
 # Known Issues & Verification Checklist
 
-## Version: 1.0.0
-## Last Updated: 2026-02-11
+## Version: 1.0.1
+## Last Updated: 2026-02-14
 ## Review Status: 2 rounds complete (4 independent reviewers)
 
 ---
@@ -58,7 +58,7 @@ These 5 assumptions must be verified in a real Claude Code environment before pu
 - **Fix**: Added quote stripping after shlex.split on Windows (v1.0.1)
 
 #### COMPAT-04: LC_ALL=C on non-MSYS2 Windows git
-- **File**: hooks/scripts/_guardian_utils.py (lines 1452-1465)
+- **File**: hooks/scripts/_guardian_utils.py, `_get_git_env()` function
 - **Issue**: LC_ALL=C forces English git output; non-MSYS2 git may not respect it
 - **Status**: Accepted risk. Git for Windows (dominant distribution) works correctly
 
@@ -67,16 +67,21 @@ These 5 assumptions must be verified in a real Claude Code environment before pu
 - **Issue**: Windows with_timeout uses threading which cannot forcibly kill the target function
 - **Status**: Accepted. Hook processes are short-lived; timeout still prevents blocking
 
-#### COMPAT-06: normalize_path resolves against CWD
-- **File**: hooks/scripts/_guardian_utils.py (lines 881-895)
-- **Issue**: normalize_path() uses os.path.abspath() resolving against CWD, not project dir
-- **Impact**: Latent bug -- not triggered since tool inputs arrive as absolute paths
-- **Fix**: Align with normalize_path_for_matching() or document as absolute-path-only
+#### ~~COMPAT-06: normalize_path resolves against CWD~~ FIXED
+- **File**: hooks/scripts/_guardian_utils.py, `normalize_path()` function
+- **Issue**: normalize_path() used os.path.abspath() resolving against CWD, not project dir
+- **Fix**: Aligned with `normalize_path_for_matching()` to resolve relative paths against project dir
 
-#### COMPAT-07: fnmatch case sensitivity on macOS
-- **File**: hooks/scripts/_guardian_utils.py (lines 1055, 1087)
-- **Issue**: Code lowercases paths only on Windows; macOS HFS+ is also case-insensitive
-- **Fix**: Consider sys.platform != 'linux' for lowercasing check
+#### ~~COMPAT-07: fnmatch case sensitivity on macOS~~ FIXED
+- **File**: hooks/scripts/_guardian_utils.py, `normalize_path_for_matching()` and `match_path_pattern()` functions
+- **Issue**: Code lowercased paths only on Windows; macOS HFS+ is also case-insensitive
+- **Fix**: Changed to `sys.platform != 'linux'` for lowercasing check (covers both Windows and macOS)
+
+#### SCOPE-01: noDeletePaths only enforced for Bash delete commands
+- **File**: hooks/scripts/bash_guardian.py, hooks/scripts/_guardian_utils.py `run_path_guardian_hook()`
+- **Issue**: `noDeletePaths` is only checked by bash_guardian.py for delete-type commands. Edit/Write hooks do not enforce noDeletePaths -- an Edit tool call could replace file contents with empty content.
+- **Impact**: Users may expect files in noDeletePaths are fully protected, but only bash `rm`-style deletion is blocked.
+- **Status**: By-design limitation. Edit/Write hooks check zeroAccessPaths, readOnlyPaths, symlink escapes, and self-guarding.
 
 ### LOW Severity
 
@@ -85,29 +90,40 @@ These 5 assumptions must be verified in a real Claude Code environment before pu
 - **Fix**: Moved --force-with-lease from block to ask patterns (v1.0.1)
 
 #### UX-09: Schema reference common patterns note
-- **Issue**: Common patterns table lists defaults without noting they are pre-included
+- **File**: assets/guardian.schema.json
+- **Issue**: The common patterns table in the schema reference lists example patterns (e.g., `rm -rf`, `.env` blocking) without noting that these patterns are already pre-included in the default configuration. Users may add duplicate patterns thinking they need to be explicitly configured.
+- **Fix**: Add a note to the common patterns table stating "These patterns are already included in the default configuration (`assets/guardian.default.json`). You only need to add them to your custom config if you have removed or overridden the defaults."
 
 #### UX-10: Config-assistant agent lacks sample output
-- **Issue**: Trigger examples show input/action but not expected output format
+- **File**: .claude-plugin/agents/config-assistant.md
+- **Issue**: The config-assistant agent definition includes trigger examples (e.g., "help me configure guardian", "what patterns should I block?") showing when the agent activates, but does not include sample output demonstrating what the agent's response looks like. Users cannot preview expected behavior before triggering the agent.
+- **Fix**: Add a "Sample Output" section to config-assistant.md showing an example response for a common query like "help me configure guardian for a Node.js project."
 
-#### UX-11: No uninstall/disable documentation
-- **Issue**: No docs on CLAUDE_HOOK_DRY_RUN=1 or uninstalling
+#### UX-11: Dry-run mode not mentioned in setup wizard
+- **Issue**: `CLAUDE_HOOK_DRY_RUN=1` dry-run mode is now documented in the README (Disabling Guardian and Setup sections), but the `/guardian:init` setup wizard does not mention it as a way to test configuration changes safely.
+- **Status**: Partially fixed -- README documents dry-run mode. Remaining gap: setup wizard does not surface dry-run as a testing option.
 
-#### UX-12: init.md quick tips depend on skill/agent
-- **Status**: Resolved -- skill/agent now registered in plugin.json
+#### ~~UX-12: init.md quick tips depend on skill/agent~~ FIXED
+- **Status**: Resolved -- skill/agent now registered in plugin.json (Round 2)
 
-#### COMPAT-08: Relative $schema in default config
-- **Issue**: $schema uses relative path which breaks when copied to user project
+#### ~~COMPAT-08: Relative $schema in default config~~ FIXED
+- **File**: assets/guardian.default.json
+- **Issue**: The `$schema` field used a relative path (`./guardian.schema.json`) which broke when users copied config to their project
+- **Fix**: Removed `$schema` field from default config entirely
 
 #### ~~COMPAT-11: errno 28 disk full check is Linux-specific~~ FIXED
 - **Issue**: e.errno == 28 was ENOSPC on Linux only; Windows uses winerror 112
 - **Fix**: Added `getattr(e, 'winerror', None) == 112` check (v1.0.1)
 
 #### COMPAT-12: Hypothetical marketplace schema URL
-- **Status**: Cosmetic only -- no runtime impact
+- **File**: .claude-plugin/marketplace.json
+- **Issue**: The `$schema` field in marketplace.json references a hypothetical URL (`https://claude.ai/schemas/marketplace.json`) that does not resolve to an actual schema endpoint. This prevents IDE-based schema validation from working.
+- **Status**: Cosmetic only -- no runtime impact. The marketplace.json file is only used during plugin discovery and installation, not at runtime.
 
-#### COMPAT-13: Recovery guidance uses Windows del on all platforms
-- **Fix**: Use sys.platform to suggest del on Windows, rm on Unix
+#### ~~COMPAT-13: Recovery guidance uses Windows del on all platforms~~ FIXED
+- **File**: hooks/scripts/_guardian_utils.py, circuit breaker recovery messages
+- **Issue**: Recovery messages suggested `del` regardless of OS; Linux/macOS users should see `rm`
+- **Fix**: Added `sys.platform` check to suggest `del` on Windows and `rm` on Unix/macOS
 
 ---
 
@@ -131,3 +147,8 @@ These 5 assumptions must be verified in a real Claude Code environment before pu
 | UX-04 | MEDIUM | Inconsistent fail-closed terminology | Round 2 |
 | UX-05 | MEDIUM | No fallback for unrecognized projects | Round 2 |
 | UX-06 | MEDIUM | Legacy path check in init wizard | Round 2 |
+| UX-12 | LOW | init.md quick tips depend on skill/agent | Round 2 |
+| COMPAT-06 | MEDIUM | normalize_path resolves against CWD | Unreleased |
+| COMPAT-07 | MEDIUM | fnmatch case sensitivity on macOS | Unreleased |
+| COMPAT-08 | LOW | Relative $schema in default config | Unreleased |
+| COMPAT-13 | LOW | Recovery guidance uses del on all platforms | Unreleased |

@@ -1,5 +1,4 @@
 {
-  "$schema": "./guardian.schema.json",
   "$comment": "Claude Code Guardian - Default Configuration v1.0.0",
   "version": "1.0.0",
   "hookBehavior": {
@@ -63,20 +62,24 @@
         "reason": "Backtick substitution with deletion"
       },
       {
-        "pattern": "(?i)eval\\s+['\"]?\\s*(?:rm|del|rmdir|shred)",
+        "pattern": "(?i)eval\\s+(?:['\"]\\s*)?(?:rm|del|rmdir|shred)",
         "reason": "Eval with deletion command"
       },
       {
-        "pattern": "(?:py|python[23]?|python\\d[\\d.]*)\\s[^|&\\n]*(?:os\\.remove|os\\.unlink|shutil\\.rmtree|os\\.rmdir|pathlib\\.Path.*\\.unlink)",
-        "reason": "Interpreter file deletion — use rm/del for monitored deletion"
+        "pattern": "(?:py|python[23]?|python\\d[\\d.]*)\\s[^|&\\n]*(?:os\\.remove|os\\.unlink|shutil\\.rmtree|shutil\\.move|os\\.rmdir)",
+        "reason": "Interpreter file deletion \u2014 use rm/del for monitored deletion"
+      },
+      {
+        "pattern": "(?:py|python[23]?|python\\d[\\d.]*)\\s[^|&\\n]*pathlib\\.Path\\([^)]*\\)\\.unlink",
+        "reason": "Interpreter file deletion \u2014 use rm/del for monitored deletion"
       },
       {
         "pattern": "(?:node|deno|bun)\\s[^|&\\n]*(?:unlinkSync|rmSync|rmdirSync|fs\\.unlink|fs\\.rm\\b|promises\\.unlink)",
-        "reason": "Interpreter file deletion — use rm/del for monitored deletion"
+        "reason": "Interpreter file deletion \u2014 use rm/del for monitored deletion"
       },
       {
         "pattern": "(?:perl|ruby)\\s[^|&\\n]*(?:\\bunlink\\b|File\\.delete|FileUtils\\.rm)",
-        "reason": "Interpreter file deletion — use rm/del for monitored deletion"
+        "reason": "Interpreter file deletion \u2014 use rm/del for monitored deletion"
       }
     ],
     "ask": [
@@ -143,6 +146,14 @@
       {
         "pattern": "(?i)delete\\s+from\\s+\\w+(?:\\s*;|\\s*$|\\s+--)",
         "reason": "SQL DELETE without WHERE (with or without semicolon)"
+      },
+      {
+        "pattern": "find\\s+.*-exec\\s+(?:rm|del|shred)",
+        "reason": "find with -exec delete \u2014 verify targets before running"
+      },
+      {
+        "pattern": "xargs\\s+(?:rm|del|shred)",
+        "reason": "xargs with delete command \u2014 verify targets before running"
       }
     ]
   },
@@ -240,5 +251,13 @@
       "email": "guardian@claude-code.local",
       "name": "Guardian Auto-Commit"
     }
+  },
+  "bashPathScan": {
+    "enabled": true,
+    "scanTiers": [
+      "zeroAccess"
+    ],
+    "exactMatchAction": "ask",
+    "patternMatchAction": "ask"
   }
 }

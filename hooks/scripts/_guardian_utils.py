@@ -77,8 +77,8 @@ DRY_RUN_ENV = "CLAUDE_HOOK_DRY_RUN"
 Set to "1", "true", or "yes" to enable."""
 
 MAX_COMMAND_LENGTH = 100_000
-"""Maximum command length in bytes before logging warning.
-Commands exceeding this are still processed (fail-open) but logged."""
+"""Maximum command length in bytes before blocking.
+Commands exceeding this are denied (fail-closed) for security."""
 
 MAX_PATH_PREVIEW_LENGTH = 60
 """Maximum path length for log display. Paths longer than this are truncated."""
@@ -311,28 +311,31 @@ def is_circuit_open() -> tuple[bool, str]:
         return True, "Unknown reason"
     except PermissionError as e:
         # M1 FIX: Specific handling for permission errors with recovery guidance
+        rm_cmd = "del" if sys.platform == "win32" else "rm"
         log_guardian(
             "ERROR",
             f"Cannot read circuit breaker (permission denied): {e}\n"
             f"  Recovery: Check file permissions on {circuit_file}\n"
-            f'  Or delete the file manually: del "{circuit_file}"',
+            f'  Or delete the file manually: {rm_cmd} "{circuit_file}"',
         )
         return True, f"Circuit breaker permission error - check {circuit_file}"
     except OSError as e:
         # M1 FIX: File system errors with recovery guidance
+        rm_cmd = "del" if sys.platform == "win32" else "rm"
         log_guardian(
             "ERROR",
             f"Cannot read circuit breaker (filesystem error): {e}\n"
-            f'  Recovery: Delete corrupted file: del "{circuit_file}"',
+            f'  Recovery: Delete corrupted file: {rm_cmd} "{circuit_file}"',
         )
         return True, f"Circuit breaker filesystem error - delete {circuit_file}"
     except Exception as e:
         # SECURITY FIX: Fail-CLOSED - treat read errors as circuit open
         # This prevents guardian bypass when circuit file is corrupted/inaccessible
+        rm_cmd = "del" if sys.platform == "win32" else "rm"
         log_guardian(
             "ERROR",
             f"Cannot read circuit breaker (unexpected): {e}\n"
-            f'  Recovery: Delete file manually: del "{circuit_file}"',
+            f'  Recovery: Delete file manually: {rm_cmd} "{circuit_file}"',
         )
         return True, f"Circuit breaker error: {e}"
 
@@ -501,6 +504,11 @@ def load_guardian_config() -> dict[str, Any]:
                 _using_fallback_config = False
                 _active_config_path = str(config_path)
                 log_guardian("INFO", f"Loaded config from {config_path}")
+                # Validate config structure (warn but don't block for backwards compatibility)
+                _validation_errors = validate_guardian_config(_config_cache)
+                if _validation_errors:
+                    for _verr in _validation_errors:
+                        log_guardian("WARN", f"Config validation: {_verr}")
                 return _config_cache
             except json.JSONDecodeError as e:
                 log_guardian(
@@ -538,6 +546,11 @@ def load_guardian_config() -> dict[str, Any]:
                     f"Using plugin default config from {default_config_path}\n"
                     "  Run /guardian:init to create a custom config for this project.",
                 )
+                # Validate config structure (warn but don't block)
+                _validation_errors = validate_guardian_config(_config_cache)
+                if _validation_errors:
+                    for _verr in _validation_errors:
+                        log_guardian("WARN", f"Config validation: {_verr}")
                 return _config_cache
             except Exception as e:
                 log_guardian(
@@ -611,6 +624,29 @@ def get_hook_behavior() -> dict[str, Any]:
     }
     behavior = config.get("hookBehavior", {})
     return {**defaults, **behavior}
+
+
+def make_hook_behavior_response(action: str, reason: str) -> dict[str, Any] | None:
+    """Create a hook response based on a hookBehavior action string.
+
+    Used by hook error/timeout handlers to respect the configured
+    hookBehavior.onError and hookBehavior.onTimeout values.
+
+    Args:
+        action: One of "deny", "ask", or "allow".
+        reason: Human-readable reason for the action.
+
+    Returns:
+        Hook response dict for "deny" or "ask", None for "allow".
+        Falls back to deny for unrecognized actions (fail-closed).
+    """
+    if action == "allow":
+        return None  # No output = allow in Claude Code hook protocol
+    elif action == "ask":
+        return ask_response(reason)
+    else:
+        # Default to deny for unrecognized values (fail-closed)
+        return deny_response(reason)
 
 
 def validate_guardian_config(config: dict) -> list[str]:
@@ -888,12 +924,16 @@ def normalize_path(path: str) -> str:
     try:
         # Expand ~ first
         expanded = os.path.expanduser(path)
-        # Get absolute path
+        # Get absolute path - resolve relative paths against project dir, not CWD
+        if not os.path.isabs(expanded):
+            project_dir = get_project_dir()
+            if project_dir:
+                expanded = os.path.join(project_dir, expanded)
         absolute = os.path.abspath(expanded)
         # Normalize separators
         normalized = os.path.normpath(absolute)
-        # Case-insensitive on Windows
-        if sys.platform == "win32":
+        # Case-insensitive on Windows and macOS (HFS+ is case-insensitive)
+        if sys.platform != "linux":
             normalized = normalized.lower()
         return normalized
     except Exception as e:
@@ -1021,7 +1061,8 @@ def normalize_path_for_matching(path: str) -> str:
         # Always use forward slashes for pattern matching
         normalized = expanded.replace("\\", "/")
 
-        if sys.platform == "win32":
+        # Case-insensitive on Windows and macOS (HFS+ is case-insensitive)
+        if sys.platform != "linux":
             normalized = normalized.lower()
 
         return normalized
@@ -1087,7 +1128,8 @@ def match_path_pattern(path: str, pattern: str) -> bool:
 
         # Expand pattern
         norm_pattern = str(Path(pattern).expanduser()).replace("\\", "/")
-        if sys.platform == "win32":
+        # Case-insensitive on Windows and macOS (HFS+ is case-insensitive)
+        if sys.platform != "linux":
             norm_pattern = norm_pattern.lower()
 
         # Try direct match with fnmatch first (for simple patterns)
@@ -1105,7 +1147,8 @@ def match_path_pattern(path: str, pattern: str) -> bool:
         project_dir = get_project_dir()
         if project_dir:
             project_normalized = project_dir.replace("\\", "/")
-            if sys.platform == "win32":
+            # Case-insensitive on Windows and macOS (HFS+ is case-insensitive)
+            if sys.platform != "linux":
                 project_normalized = project_normalized.lower()
 
             # Use + "/" to ensure exact prefix match
@@ -1397,9 +1440,9 @@ def evaluate_rules(command: str) -> tuple[str, str]:
         # 3. No rule triggered
         return "allow", ""
     except Exception as e:
-        # Fail-open: on any error, allow and log
+        # Fail-closed: on any error, deny to prevent bypass
         log_guardian("ERROR", f"Error in evaluate_rules: {e}")
-        return "allow", ""
+        return "deny", "Guardian internal error (fail-closed)"
 
 
 # ============================================================
@@ -2114,13 +2157,15 @@ def is_self_guardian_path(path: str) -> bool:
         return False
 
     project_normalized = project_dir.replace("\\", "/")
-    if sys.platform == "win32":
+    # Case-insensitive on Windows and macOS (HFS+ is case-insensitive)
+    if sys.platform != "linux":
         project_normalized = project_normalized.lower()
 
     # Check static self-guardian paths
     for protected in SELF_GUARDIAN_PATHS:
         protected_norm = protected.replace("\\", "/")
-        if sys.platform == "win32":
+        # Case-insensitive on Windows and macOS (HFS+ is case-insensitive)
+        if sys.platform != "linux":
             protected_norm = protected_norm.lower()
 
         # Check exact match against full protected path
@@ -2266,7 +2311,11 @@ def run_path_guardian_hook(tool_name: str) -> None:
         if is_dry_run():
             log_guardian("DRY-RUN", f"Would DENY {tool_name}")
             sys.exit(0)
-        print(_json.dumps(deny_response(f"Protected file (no access): {Path(file_path).name}")))
+        reason = (
+            f"Protected file (no access): {Path(file_path).name}"
+            "\nBash alternatives (cat, sed, echo >, etc.) are also monitored by Guardian."
+        )
+        print(_json.dumps(deny_response(reason)))
         sys.exit(0)
 
     # ========== Check: Read Only ==========
@@ -2276,7 +2325,11 @@ def run_path_guardian_hook(tool_name: str) -> None:
         if is_dry_run():
             log_guardian("DRY-RUN", f"Would DENY {tool_name}")
             sys.exit(0)
-        print(_json.dumps(deny_response(f"Read-only file: {Path(file_path).name}")))
+        reason = (
+            f"Read-only file: {Path(file_path).name}"
+            "\nBash alternatives (cat, sed, echo >, etc.) are also monitored by Guardian."
+        )
+        print(_json.dumps(deny_response(reason)))
         sys.exit(0)
 
     # ========== Allow ==========

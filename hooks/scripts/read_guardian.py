@@ -24,7 +24,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 try:
     from _guardian_utils import (
+        get_hook_behavior,  # hookBehavior config support
         log_guardian,
+        make_hook_behavior_response,  # hookBehavior response helper
         run_path_guardian_hook,
         set_circuit_open,  # Phase 4 Fix: Circuit Breaker
     )
@@ -53,19 +55,28 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        # Fail-close: on unexpected errors, deny for safety
+        # Use hookBehavior.onError from config (default: "deny" = fail-closed)
         log_guardian("ERROR", f"Read guardian error: {type(e).__name__}: {e}")
-        # Set circuit open to prevent auto-commit of potentially corrupted state
         set_circuit_open(f"read_guardian crashed: {type(e).__name__}")
-        print(
-            json.dumps(
-                {
-                    "hookSpecificOutput": {
-                        "hookEventName": "PreToolUse",
-                        "permissionDecision": "deny",
-                        "permissionDecisionReason": f"Guardian system error: {e}",
-                    }
-                }
+        try:
+            error_action = get_hook_behavior().get("onError", "deny")
+            response = make_hook_behavior_response(
+                error_action,
+                f"Guardian system error: {e}",
             )
-        )
+            if response is not None:
+                print(json.dumps(response))
+        except Exception:
+            # If hookBehavior lookup itself fails, fall back to deny (fail-closed)
+            print(
+                json.dumps(
+                    {
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": f"Guardian system error: {e}",
+                        }
+                    }
+                )
+            )
         sys.exit(0)

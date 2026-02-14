@@ -4,7 +4,11 @@
   "title": "Claude Code Guardian Configuration",
   "description": "Security guardrails for Claude Code Guardian - defines blocked patterns, guarded paths, and git integration settings",
   "type": "object",
-  "required": ["version", "hookBehavior", "bashToolPatterns"],
+  "required": [
+    "version",
+    "hookBehavior",
+    "bashToolPatterns"
+  ],
   "additionalProperties": false,
   "properties": {
     "$schema": {
@@ -23,17 +27,29 @@
     "hookBehavior": {
       "type": "object",
       "description": "Default behavior when hooks encounter errors or timeouts",
-      "required": ["onTimeout", "onError", "timeoutSeconds"],
+      "required": [
+        "onTimeout",
+        "onError",
+        "timeoutSeconds"
+      ],
       "additionalProperties": false,
       "properties": {
         "onTimeout": {
           "type": "string",
-          "enum": ["allow", "deny", "ask"],
+          "enum": [
+            "allow",
+            "deny",
+            "ask"
+          ],
           "description": "Action when hook times out"
         },
         "onError": {
           "type": "string",
-          "enum": ["allow", "deny", "ask"],
+          "enum": [
+            "allow",
+            "deny",
+            "ask"
+          ],
           "description": "Action when hook encounters an error"
         },
         "timeoutSeconds": {
@@ -158,13 +174,61 @@
           }
         }
       }
+    },
+    "bashPathScan": {
+      "type": "object",
+      "description": "Raw command string scanning for protected path names (Layer 1)",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable/disable the raw string scan layer"
+        },
+        "scanTiers": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "zeroAccess",
+              "readOnly",
+              "noDelete"
+            ]
+          },
+          "default": [
+            "zeroAccess"
+          ],
+          "description": "Which protection tiers to scan for"
+        },
+        "exactMatchAction": {
+          "type": "string",
+          "enum": [
+            "deny",
+            "ask"
+          ],
+          "default": "ask",
+          "description": "Action for exact filename matches"
+        },
+        "patternMatchAction": {
+          "type": "string",
+          "enum": [
+            "deny",
+            "ask"
+          ],
+          "default": "ask",
+          "description": "Action for glob-derived pattern matches"
+        }
+      }
     }
   },
   "$defs": {
     "patternRule": {
       "type": "object",
       "description": "A regex pattern with reason for blocking/asking",
-      "required": ["pattern", "reason"],
+      "required": [
+        "pattern",
+        "reason"
+      ],
       "additionalProperties": false,
       "properties": {
         "pattern": {
