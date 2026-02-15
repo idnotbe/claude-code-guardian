@@ -710,8 +710,8 @@ def validate_guardian_config(config: dict) -> list[str]:
             except re.error as e:
                 errors.append(f"Invalid regex in bashToolPatterns.{category}[{i}]: {e}")
 
-    # Check path patterns are strings/lists
-    path_sections = ["zeroAccessPaths", "readOnlyPaths", "noDeletePaths", "allowedExternalPaths"]
+    # Check path patterns are strings/lists (excludes allowedExternalPaths which has custom validation)
+    path_sections = ["zeroAccessPaths", "readOnlyPaths", "noDeletePaths"]
     for section in path_sections:
         paths = config.get(section, [])
         if not isinstance(paths, list):
@@ -720,6 +720,21 @@ def validate_guardian_config(config: dict) -> list[str]:
         for i, path in enumerate(paths):
             if not isinstance(path, str):
                 errors.append(f"{section}[{i}] must be a string, got {type(path).__name__}")
+
+    # Check allowedExternalPaths entries (supports string or object with path/mode)
+    allowed_ext = config.get("allowedExternalPaths", [])
+    if isinstance(allowed_ext, list):
+        for i, entry in enumerate(allowed_ext):
+            if isinstance(entry, dict):
+                if "path" not in entry:
+                    errors.append(f"allowedExternalPaths[{i}] object missing 'path' field")
+                mode = entry.get("mode", "read")
+                if mode not in ("read", "readwrite"):
+                    errors.append(f"allowedExternalPaths[{i}] invalid mode: {mode} (must be 'read' or 'readwrite')")
+            elif not isinstance(entry, str):
+                errors.append(f"allowedExternalPaths[{i}] must be string or object, got {type(entry).__name__}")
+    else:
+        errors.append("allowedExternalPaths must be a list")
 
     # Check gitIntegration structure (optional but should be valid if present)
     git_integration = config.get("gitIntegration", {})
@@ -1217,21 +1232,38 @@ def match_no_delete(path: str) -> bool:
     return any(match_path_pattern(path, p) for p in patterns)
 
 
-def match_allowed_external_path(path: str) -> bool:
-    """Check if path matches allowedExternalPaths (permitted outside-project writes).
+def match_allowed_external_path(path: str) -> tuple:
+    """Check if path matches allowedExternalPaths with mode support.
+
+    Supports two formats:
+    - String: treated as read-only (mode="read")
+    - Object {"path": "...", "mode": "read"|"readwrite"}: explicit mode
 
     These paths bypass ONLY the 'outside project' check.
     All other checks (symlink, zeroAccess, readOnly, selfGuardian) still apply.
+
+    First-match-wins: patterns are evaluated in config order.
 
     Args:
         path: The path to check.
 
     Returns:
-        True if path is in allowedExternalPaths.
+        Tuple of (matched, mode). mode is "read", "readwrite", or "" if not matched.
     """
     config = load_guardian_config()
     patterns = config.get("allowedExternalPaths", [])
-    return any(match_path_pattern(path, p) for p in patterns)
+    for entry in patterns:
+        if isinstance(entry, dict):
+            pattern = entry.get("path", "")
+            mode = entry.get("mode", "read")
+            if mode not in ("read", "readwrite"):
+                mode = "read"  # fail-safe: invalid mode defaults to read-only
+        else:
+            pattern = str(entry)
+            mode = "read"
+        if pattern and match_path_pattern(path, pattern):
+            return (True, mode)
+    return (False, "")
 
 
 # ============================================================
@@ -2282,10 +2314,22 @@ def run_path_guardian_hook(tool_name: str) -> None:
     # ========== Check: Path Within Project ==========
     if not is_path_within_project(path_str):
         # Check if path is in allowedExternalPaths before blocking
-        if match_allowed_external_path(path_str):
+        matched, ext_mode = match_allowed_external_path(path_str)
+        if matched:
+            # Mode check: read-only external paths block Write/Edit
+            if ext_mode == "read" and tool_name.lower() in ("write", "edit"):
+                log_guardian("BLOCK", f"Read-only external path ({tool_name}): {path_preview}")
+                if is_dry_run():
+                    log_guardian("DRY-RUN", f"Would DENY {tool_name} (read-only external)")
+                    sys.exit(0)
+                print(_json.dumps(deny_response(
+                    f"External path is read-only: {Path(file_path).name}\n"
+                    "Use {\"path\": \"...\", \"mode\": \"readwrite\"} in allowedExternalPaths to allow writes."
+                )))
+                sys.exit(0)
             log_guardian(
                 "ALLOW",
-                f"Allowed external path ({tool_name}): {path_preview}"
+                f"Allowed external path ({tool_name}, mode={ext_mode}): {path_preview}"
             )
             # Fall through to remaining checks (self-guardian, zeroAccess, readOnly)
         else:
