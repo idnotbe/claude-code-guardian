@@ -106,22 +106,19 @@
         "type": "string"
       }
     },
-    "allowedExternalPaths": {
+    "allowedExternalReadPaths": {
       "type": "array",
-      "description": "Glob patterns for paths outside the project. String entries are read-only by default. Use object format with mode for write access. Only bypasses the 'outside project' check — zeroAccess, readOnly, and symlink checks still apply.",
+      "description": "Glob patterns for paths outside the project that are allowed for read-only access. Supports ~ expansion and ** recursive matching. Only bypasses the 'outside project' check — zeroAccess, readOnly, and symlink checks still apply.",
       "items": {
-        "oneOf": [
-          { "type": "string", "description": "Glob pattern (read-only mode)" },
-          {
-            "type": "object",
-            "required": ["path"],
-            "additionalProperties": false,
-            "properties": {
-              "path": { "type": "string", "description": "Glob pattern for external path" },
-              "mode": { "type": "string", "enum": ["read", "readwrite"], "default": "read", "description": "Access mode: 'read' (default) or 'readwrite'" }
-            }
-          }
-        ]
+        "type": "string"
+      },
+      "default": []
+    },
+    "allowedExternalWritePaths": {
+      "type": "array",
+      "description": "Glob patterns for paths outside the project that are allowed for read and write access (Read, Write, Edit tools). Supports ~ expansion and ** recursive matching. Only bypasses the 'outside project' check — zeroAccess, readOnly, and symlink checks still apply.",
+      "items": {
+        "type": "string"
       },
       "default": []
     },

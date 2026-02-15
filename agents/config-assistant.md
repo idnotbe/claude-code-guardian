@@ -147,7 +147,8 @@ The full config.json schema is documented at `${CLAUDE_PLUGIN_ROOT}/skills/confi
 - `zeroAccessPaths` -- files that cannot be read or written (secrets)
 - `readOnlyPaths` -- files that can be read but not written
 - `noDeletePaths` -- files that cannot be deleted
-- `allowedExternalPaths` -- paths outside project allowed for writes
+- `allowedExternalReadPaths` -- paths outside project allowed for read-only access
+- `allowedExternalWritePaths` -- paths outside project allowed for read and write access
 - `gitIntegration` -- auto-commit, pre-danger checkpoints, git identity
 
 ### Common Regex Tips

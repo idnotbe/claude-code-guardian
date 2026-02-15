@@ -14,7 +14,8 @@ Complete documentation for `config.json` -- the Guardian configuration file.
   "zeroAccessPaths": [ ... ],
   "readOnlyPaths": [ ... ],
   "noDeletePaths": [ ... ],
-  "allowedExternalPaths": [ ... ],
+  "allowedExternalReadPaths": [ ... ],
+  "allowedExternalWritePaths": [ ... ],
   "gitIntegration": { ... }
 }
 ```
@@ -158,13 +159,23 @@ Files that can be read and written but not deleted. Protects critical project fi
 ]
 ```
 
-### allowedExternalPaths
+### allowedExternalReadPaths
 
-Paths **outside** the project directory that are explicitly allowed for write operations. Only bypasses the "outside project" check -- zeroAccess and readOnly rules still apply.
+Paths **outside** the project directory that are explicitly allowed for **read-only** access. Write and edit operations on these paths are denied. Only bypasses the "outside project" check -- zeroAccess and readOnly rules still apply.
 
 ```json
-"allowedExternalPaths": [
+"allowedExternalReadPaths": [
   "~/shared-config/**",
+  "~/.claude/projects/*/memory/**"
+]
+```
+
+### allowedExternalWritePaths
+
+Paths **outside** the project directory that are explicitly allowed for **read and write** access. Only bypasses the "outside project" check -- zeroAccess and readOnly rules still apply.
+
+```json
+"allowedExternalWritePaths": [
   "/tmp/build-output/**"
 ]
 ```

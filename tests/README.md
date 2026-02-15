@@ -61,7 +61,7 @@ in `patterns/`) do not need `_bootstrap`. The root-level foundation tests
 |-----------|---------|------------|
 | core/ | Comprehensive suites covering all P0, P1, and V2 fixes | unittest |
 | security/ | Adversarial bypass attempts, cross-model red-teaming | unittest + script |
-| regression/ | Bug-specific tests (Errno 36, allowedExternalPaths) | script |
+| regression/ | Bug-specific tests (Errno 36, allowedExternalReadPaths/WritePaths) | script |
 | review/ | Edge cases found during code review (pattern-level F1-F10 analysis) | script |
 | usability/ | False positive rate analysis, fail-closed workflow impact | script |
 | patterns/ | Standalone regex verification (use verify_ prefix) | script |

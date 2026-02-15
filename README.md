@@ -128,7 +128,8 @@ If neither is found, a hardcoded minimal guardian ruleset activates as an emerge
 | `zeroAccessPaths` | Glob patterns for files that cannot be read or written |
 | `readOnlyPaths` | Glob patterns for read-only files |
 | `noDeletePaths` | Glob patterns for files that cannot be deleted |
-| `allowedExternalPaths` | Paths outside the project allowed for writes |
+| `allowedExternalReadPaths` | Glob patterns for paths outside the project allowed for read-only access |
+| `allowedExternalWritePaths` | Glob patterns for paths outside the project allowed for read and write access |
 | `gitIntegration` | Auto-commit and git identity settings |
 | `bashPathScan` | Scans bash commands for references to protected path names (e.g., catches `python3 script.py --file .env`). Supports `scanTiers` to control which path types to scan for |
 
