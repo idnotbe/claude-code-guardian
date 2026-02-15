@@ -519,7 +519,7 @@ def extract_paths(
                             paths.append(suffix_path)
                         elif allow_nonexistent and _is_within_project_or_would_be(suffix_path, project_dir):
                             paths.append(suffix_path)
-                        elif match_allowed_external_path(str(suffix_path))[0]:
+                        elif match_allowed_external_path(str(suffix_path)):
                             paths.append(suffix_path)
                     except OSError:
                         pass
@@ -553,14 +553,14 @@ def extract_paths(
                     p = Path(exp)
                     if p.exists() and is_within_project(p, project_dir):
                         paths.append(p)
-                    elif match_allowed_external_path(str(p))[0]:
+                    elif match_allowed_external_path(str(p)):
                         paths.append(p)
             else:
                 if path.exists() and is_within_project(path, project_dir):
                     paths.append(path)
                 elif allow_nonexistent and _is_within_project_or_would_be(path, project_dir):
                     paths.append(path)
-                elif match_allowed_external_path(str(path))[0]:
+                elif match_allowed_external_path(str(path)):
                     paths.append(path)
         except OSError:
             continue
@@ -1062,8 +1062,8 @@ def main() -> None:
 
             # External read-only check (for write commands targeting allowedExternalReadPaths)
             if is_write or is_delete:
-                ext_matched, ext_mode = match_allowed_external_path(path_str)
-                if ext_matched and ext_mode == "read":
+                ext_mode = match_allowed_external_path(path_str)
+                if ext_mode == "read":
                     log_guardian("BLOCK", f"Read-only external path (bash write): {path.name}")
                     final_verdict = _stronger_verdict(
                         final_verdict, ("deny", f"External path is read-only: {path.name}")

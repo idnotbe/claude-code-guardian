@@ -732,6 +732,14 @@ def validate_guardian_config(config: dict) -> list[str]:
                 type_name = type(enabled).__name__
                 errors.append(f"gitIntegration.autoCommit.enabled must be boolean, got {type_name}")
 
+    # Check for deprecated config key
+    if "allowedExternalPaths" in config:
+        errors.append(
+            "DEPRECATED: 'allowedExternalPaths' is no longer supported. "
+            "Use 'allowedExternalReadPaths' (read-only) or "
+            "'allowedExternalWritePaths' (read+write) instead."
+        )
+
     return errors
 
 
@@ -1218,7 +1226,7 @@ def match_no_delete(path: str) -> bool:
     return any(match_path_pattern(path, p) for p in patterns)
 
 
-def match_allowed_external_path(path: str) -> tuple:
+def match_allowed_external_path(path: str) -> str | None:
     """Check if path matches allowedExternalReadPaths or allowedExternalWritePaths.
 
     Checks allowedExternalWritePaths first (more permissive — includes read).
@@ -1229,21 +1237,21 @@ def match_allowed_external_path(path: str) -> tuple:
         path: The path to check.
 
     Returns:
-        Tuple of (matched, mode):
-        - (True, "readwrite") if path matches allowedExternalWritePaths
-        - (True, "read") if path matches allowedExternalReadPaths
-        - (False, "") if not matched
+        Mode string if matched, None if not:
+        - "readwrite" if path matches allowedExternalWritePaths
+        - "read" if path matches allowedExternalReadPaths
+        - None if not matched
     """
     config = load_guardian_config()
     # Check write paths first (more permissive — also grants read)
     write_patterns = config.get("allowedExternalWritePaths", [])
     if any(match_path_pattern(path, p) for p in write_patterns if isinstance(p, str)):
-        return (True, "readwrite")
+        return "readwrite"
     # Check read paths
     read_patterns = config.get("allowedExternalReadPaths", [])
     if any(match_path_pattern(path, p) for p in read_patterns if isinstance(p, str)):
-        return (True, "read")
-    return (False, "")
+        return "read"
+    return None
 
 
 # ============================================================
@@ -2294,8 +2302,8 @@ def run_path_guardian_hook(tool_name: str) -> None:
     # ========== Check: Path Within Project ==========
     if not is_path_within_project(path_str):
         # Check if path is in allowedExternalReadPaths/WritePaths before blocking
-        matched, ext_mode = match_allowed_external_path(path_str)
-        if matched:
+        ext_mode = match_allowed_external_path(path_str)
+        if ext_mode is not None:
             # Mode check: read-only external paths block Write/Edit
             if ext_mode == "read" and tool_name.lower() in ("write", "edit"):
                 log_guardian("BLOCK", f"Read-only external path ({tool_name}): {path_preview}")

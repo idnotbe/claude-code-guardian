@@ -75,8 +75,8 @@ class TestResults:
 def setup_test_environment():
     """Create a temp project dir with guardian config using new split keys."""
     test_dir = tempfile.mkdtemp(prefix="allowed_ext_test_")
-    hooks_dir = Path(test_dir) / ".claude" / "hooks"
-    hooks_dir.mkdir(parents=True, exist_ok=True)
+    guardian_dir = Path(test_dir) / ".claude" / "guardian"
+    guardian_dir.mkdir(parents=True, exist_ok=True)
 
     git_dir = Path(test_dir) / ".git"
     git_dir.mkdir(parents=True, exist_ok=True)
@@ -104,7 +104,7 @@ def setup_test_environment():
         "allowedExternalWritePaths": [],
     }
 
-    config_path = hooks_dir / "guardian.json"
+    config_path = guardian_dir / "config.json"
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(test_config, f, indent=2)
 
@@ -115,8 +115,8 @@ def setup_test_environment():
 def setup_empty_allowed_env():
     """Create env where both external path lists are empty."""
     test_dir = tempfile.mkdtemp(prefix="allowed_ext_empty_")
-    hooks_dir = Path(test_dir) / ".claude" / "hooks"
-    hooks_dir.mkdir(parents=True, exist_ok=True)
+    guardian_dir = Path(test_dir) / ".claude" / "guardian"
+    guardian_dir.mkdir(parents=True, exist_ok=True)
     git_dir = Path(test_dir) / ".git"
     git_dir.mkdir(parents=True, exist_ok=True)
 
@@ -131,7 +131,7 @@ def setup_empty_allowed_env():
         "allowedExternalWritePaths": [],
     }
 
-    config_path = hooks_dir / "guardian.json"
+    config_path = guardian_dir / "config.json"
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(test_config, f, indent=2)
 
@@ -175,32 +175,32 @@ def run_tests():
 
     # Test 1.1: Exact memory path
     memory_path = str(home / ".claude" / "projects" / "E--ops" / "memory" / "MEMORY.md")
-    matched, mode = gu.match_allowed_external_path(memory_path)
+    mode = gu.match_allowed_external_path(memory_path)
     results.record(
         "Memory path (MEMORY.md) matches allowedExternalReadPaths",
-        matched is True and mode == "read",
-        expected="(True, 'read')",
-        got=f"({matched}, '{mode}')",
+        mode == "read",
+        expected="'read'",
+        got=repr(mode),
     )
 
     # Test 1.2: Different project slug
     other_path = str(home / ".claude" / "projects" / "C--other-project" / "memory" / "MEMORY.md")
-    matched, mode = gu.match_allowed_external_path(other_path)
+    mode = gu.match_allowed_external_path(other_path)
     results.record(
         "Different project slug matches",
-        matched is True and mode == "read",
-        expected="(True, 'read')",
-        got=f"({matched}, '{mode}')",
+        mode == "read",
+        expected="'read'",
+        got=repr(mode),
     )
 
     # Test 1.3: Nested file in memory directory
     nested_path = str(home / ".claude" / "projects" / "E--ops" / "memory" / "sub" / "file.md")
-    matched, mode = gu.match_allowed_external_path(nested_path)
+    mode = gu.match_allowed_external_path(nested_path)
     results.record(
         "Nested file in memory dir matches (** glob)",
-        matched is True and mode == "read",
-        expected="(True, 'read')",
-        got=f"({matched}, '{mode}')",
+        mode == "read",
+        expected="'read'",
+        got=repr(mode),
     )
 
     # ============================================================
@@ -210,22 +210,22 @@ def run_tests():
 
     # Test 2.1: Desktop path
     desktop_path = str(home / "Desktop" / "test.txt")
-    matched, mode = gu.match_allowed_external_path(desktop_path)
+    mode = gu.match_allowed_external_path(desktop_path)
     results.record(
         "Desktop path does NOT match",
-        matched is False,
-        expected="(False, '')",
-        got=f"({matched}, '{mode}')",
+        mode is None,
+        expected="None",
+        got=repr(mode),
     )
 
     # Test 2.2: Claude config (not in memory dir)
     config_path = str(home / ".claude" / "projects" / "E--ops" / "config.json")
-    matched, mode = gu.match_allowed_external_path(config_path)
+    mode = gu.match_allowed_external_path(config_path)
     results.record(
         "Claude projects config.json (not in memory/) does NOT match",
-        matched is False,
-        expected="(False, '')",
-        got=f"({matched}, '{mode}')",
+        mode is None,
+        expected="None",
+        got=repr(mode),
     )
 
     # ============================================================
@@ -236,24 +236,24 @@ def run_tests():
     # Test 3.1: Path traversal
     traversal_path = str(home / ".claude" / "projects" / "E--ops" / "memory" / ".." / ".." / ".." / ".ssh" / "id_rsa")
     resolved = str(Path(traversal_path).resolve())
-    matched, mode = gu.match_allowed_external_path(resolved)
+    mode = gu.match_allowed_external_path(resolved)
     results.record(
         "Path traversal to .ssh/id_rsa does NOT match after resolve",
-        matched is False,
-        expected="(False, '')",
-        got=f"({matched}, '{mode}')",
+        mode is None,
+        expected="None",
+        got=repr(mode),
         note=f"Resolved to: {resolved}",
     )
 
     # Test 3.2: .env in memory dir - matches external but zeroAccess should still block
     env_in_memory = str(home / ".claude" / "projects" / "E--ops" / "memory" / ".env")
-    matched, mode = gu.match_allowed_external_path(env_in_memory)
+    mode = gu.match_allowed_external_path(env_in_memory)
     zero_result = gu.match_zero_access(env_in_memory)
     results.record(
         ".env in memory dir: matches external (as expected)",
-        matched is True,
-        expected=True,
-        got=matched,
+        mode is not None,
+        expected="not None",
+        got=repr(mode),
     )
     results.record(
         ".env in memory dir: ALSO matches zeroAccess (still blocked)",
@@ -287,12 +287,12 @@ def run_tests():
     gu = importlib.import_module("_guardian_utils")
 
     memory_with_empty = str(home / ".claude" / "projects" / "E--ops" / "memory" / "MEMORY.md")
-    matched, mode = gu.match_allowed_external_path(memory_with_empty)
+    mode = gu.match_allowed_external_path(memory_with_empty)
     results.record(
         "Empty external path lists: memory path does NOT match",
-        matched is False,
-        expected="(False, '')",
-        got=f"({matched}, '{mode}')",
+        mode is None,
+        expected="None",
+        got=repr(mode),
         note="Fail-closed: empty lists mean no external paths allowed",
     )
     cleanup(empty_dir)
@@ -309,7 +309,7 @@ def run_tests():
     all_match = True
     for slug in slugs:
         p = str(home / ".claude" / "projects" / slug / "memory" / "test.md")
-        m, _ = gu.match_allowed_external_path(p)
+        m = gu.match_allowed_external_path(p)
         if not m:
             all_match = False
             break
