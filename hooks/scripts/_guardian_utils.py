@@ -959,18 +959,16 @@ def expand_path(path: str) -> Path:
 
     Returns:
         Resolved absolute Path object.
+
+    Raises:
+        OSError: If path resolution fails.
     """
-    try:
-        p = Path(path).expanduser()
-        if not p.is_absolute():
-            project_dir = get_project_dir()
-            if project_dir:
-                p = Path(project_dir) / p
-        return p.resolve()
-    except Exception as e:
-        # On error, log warning and return Path of original (fail-open)
-        log_guardian("WARN", f"Error expanding path '{path}': {e}")
-        return Path(path)
+    p = Path(path).expanduser()
+    if not p.is_absolute():
+        project_dir = get_project_dir()
+        if project_dir:
+            p = Path(project_dir) / p
+    return p.resolve()
 
 
 def is_symlink_escape(path: str) -> bool:
@@ -985,11 +983,14 @@ def is_symlink_escape(path: str) -> bool:
     Returns:
         True if the path is a symlink that resolves outside the project.
         False if not a symlink, or if it resolves within the project.
-        False on any error (fail-open, but logs warning).
+        True on any error (fail-closed).
     """
     project_dir = get_project_dir()
     if not project_dir:
-        return False
+        # SECURITY: No project dir = can't verify symlink safety, assume escape
+        # NOTE: log_guardian() is a no-op when project dir is missing, use stderr
+        print("GUARDIAN WARN: No project dir set, treating symlink as potential escape", file=sys.stderr)
+        return True
 
     try:
         p = Path(path).expanduser()
@@ -1016,8 +1017,9 @@ def is_symlink_escape(path: str) -> bool:
             )
             return True
     except Exception as e:
+        # SECURITY: Error during symlink check = assume escape (fail-closed)
         log_guardian("WARN", f"Error checking symlink escape for {path}: {e}")
-        return False  # Fail-open
+        return True  # Fail-closed
 
 
 def is_path_within_project(path: str) -> bool:
@@ -1030,11 +1032,14 @@ def is_path_within_project(path: str) -> bool:
 
     Returns:
         True if path is within project directory.
-        False if outside project or on error.
+        False if outside project or on any error (fail-closed).
     """
     project_dir = get_project_dir()
     if not project_dir:
-        return True  # No project dir = can't verify, allow
+        # SECURITY: No project dir = can't verify boundaries, deny by default
+        # NOTE: log_guardian() is a no-op when project dir is missing, use stderr
+        print("GUARDIAN WARN: No project dir set, failing closed for path check", file=sys.stderr)
+        return False  # Fail-closed
 
     try:
         resolved = expand_path(path)
@@ -1046,9 +1051,9 @@ def is_path_within_project(path: str) -> bool:
         except ValueError:
             return False
     except Exception as e:
-        # Log warning and fail-open (allow operation)
+        # SECURITY: Error during resolution = treat as outside project (fail-closed)
         log_guardian("WARN", f"Error checking if path is within project '{path}': {e}")
-        return True  # Fail-open
+        return False  # Fail-closed
 
 
 def normalize_path_for_matching(path: str) -> str:
@@ -1064,21 +1069,19 @@ def normalize_path_for_matching(path: str) -> str:
 
     Returns:
         Normalized path string with forward slashes.
+
+    Raises:
+        OSError: If path expansion/resolution fails.
     """
-    try:
-        expanded = str(expand_path(path))
-        # Always use forward slashes for pattern matching
-        normalized = expanded.replace("\\", "/")
+    expanded = str(expand_path(path))
+    # Always use forward slashes for pattern matching
+    normalized = expanded.replace("\\", "/")
 
-        # Case-insensitive on Windows and macOS (HFS+ is case-insensitive)
-        if sys.platform != "linux":
-            normalized = normalized.lower()
+    # Case-insensitive on Windows and macOS (HFS+ is case-insensitive)
+    if sys.platform != "linux":
+        normalized = normalized.lower()
 
-        return normalized
-    except Exception as e:
-        # On error, log warning and return original path (fail-open)
-        log_guardian("WARN", f"Error normalizing path for matching '{path}': {e}")
-        return path
+    return normalized
 
 
 def _match_recursive_glob(path_parts: list[str], pattern_parts: list[str]) -> bool:
@@ -1115,7 +1118,7 @@ def _match_recursive_glob(path_parts: list[str], pattern_parts: list[str]) -> bo
     return False
 
 
-def match_path_pattern(path: str, pattern: str) -> bool:
+def match_path_pattern(path: str, pattern: str, *, default_on_error: bool = False) -> bool:
     """Match a path against a glob pattern.
 
     Handles:
@@ -1127,6 +1130,8 @@ def match_path_pattern(path: str, pattern: str) -> bool:
     Args:
         path: The path to check.
         pattern: The glob pattern to match against.
+        default_on_error: Value to return on error. Use True for deny-list
+            checks (fail-closed) and False for allow-list checks (fail-closed).
 
     Returns:
         True if path matches pattern.
@@ -1181,7 +1186,7 @@ def match_path_pattern(path: str, pattern: str) -> bool:
         return False
     except Exception as e:
         log_guardian("WARN", f"Error matching path {path} against {pattern}: {e}")
-        return False
+        return default_on_error
 
 
 def match_zero_access(path: str) -> bool:
@@ -1195,7 +1200,7 @@ def match_zero_access(path: str) -> bool:
     """
     config = load_guardian_config()
     patterns = config.get("zeroAccessPaths", [])
-    return any(match_path_pattern(path, p) for p in patterns)
+    return any(match_path_pattern(path, p, default_on_error=True) for p in patterns)
 
 
 def match_read_only(path: str) -> bool:
@@ -1209,7 +1214,7 @@ def match_read_only(path: str) -> bool:
     """
     config = load_guardian_config()
     patterns = config.get("readOnlyPaths", [])
-    return any(match_path_pattern(path, p) for p in patterns)
+    return any(match_path_pattern(path, p, default_on_error=True) for p in patterns)
 
 
 def match_no_delete(path: str) -> bool:
@@ -1223,7 +1228,7 @@ def match_no_delete(path: str) -> bool:
     """
     config = load_guardian_config()
     patterns = config.get("noDeletePaths", [])
-    return any(match_path_pattern(path, p) for p in patterns)
+    return any(match_path_pattern(path, p, default_on_error=True) for p in patterns)
 
 
 def match_allowed_external_path(path: str) -> str | None:
@@ -2169,8 +2174,12 @@ def is_self_guardian_path(path: str) -> bool:
     Returns:
         True if path should be protected as part of guardian system.
     """
-    # Normalize path for comparison
-    norm_path = normalize_path_for_matching(path)
+    # SECURITY: Fail-closed if normalization fails (protect guardian files)
+    try:
+        norm_path = normalize_path_for_matching(path)
+    except Exception:
+        log_guardian("WARN", f"Cannot normalize path for self-guardian check: {path}")
+        return True  # Fail-closed: assume it's a guardian path if we can't verify
 
     project_dir = get_project_dir()
     if not project_dir:
@@ -2197,7 +2206,11 @@ def is_self_guardian_path(path: str) -> bool:
     # PLUGIN MIGRATION: Also check dynamic config path (the actually-loaded config)
     active_config = get_active_config_path()
     if active_config:
-        active_norm = normalize_path_for_matching(active_config)
+        try:
+            active_norm = normalize_path_for_matching(active_config)
+        except Exception:
+            log_guardian("WARN", "Cannot normalize active config path")
+            return True  # Fail-closed
         if norm_path == active_norm:
             return True
 
@@ -2212,6 +2225,9 @@ def resolve_tool_path(file_path: str) -> Path:
 
     Returns:
         Resolved absolute Path object.
+
+    Raises:
+        OSError: If path resolution fails.
     """
     path = Path(file_path)
 
@@ -2220,12 +2236,7 @@ def resolve_tool_path(file_path: str) -> Path:
         if project_dir:
             path = Path(project_dir) / path
 
-    # Resolve symlinks to prevent bypass
-    try:
-        return path.resolve()
-    except OSError as e:
-        log_guardian("WARN", f"Could not resolve path {file_path}: {e}")
-        return path
+    return path.resolve()
 
 
 def run_path_guardian_hook(tool_name: str) -> None:
@@ -2233,6 +2244,10 @@ def run_path_guardian_hook(tool_name: str) -> None:
 
     This is the main entry point for path-based guardian hooks.
     It implements fail-close semantics for security.
+
+    Checks (in order): symlink escape, project boundary, self-guardian,
+    zeroAccessPaths, readOnlyPaths, noDeletePaths (Write tool only,
+    existing files only).
 
     Args:
         tool_name: The tool name to check for ("Read", "Edit", or "Write").
@@ -2284,7 +2299,12 @@ def run_path_guardian_hook(tool_name: str) -> None:
         sys.exit(0)
 
     # Resolve to absolute path
-    resolved = resolve_tool_path(file_path)
+    try:
+        resolved = resolve_tool_path(file_path)
+    except (OSError, RuntimeError) as e:
+        log_guardian("ERROR", f"Cannot resolve path {truncate_path(file_path)}: {e}")
+        print(_json.dumps(deny_response(f"Cannot resolve file path: {Path(file_path).name}")))
+        sys.exit(0)
     path_str = str(resolved)
     path_preview = truncate_path(file_path)
 
@@ -2363,6 +2383,27 @@ def run_path_guardian_hook(tool_name: str) -> None:
         )
         print(_json.dumps(deny_response(reason)))
         sys.exit(0)
+
+    # ========== Check: No Delete (Write tool — content destruction prevention) ==========
+    if tool_name.lower() == "write" and match_no_delete(path_str):
+        # SECURITY: Fail-closed on exists() error (assume file exists if check fails)
+        try:
+            nodelete_resolved = expand_path(file_path)
+            file_exists = nodelete_resolved.exists()
+        except Exception:
+            log_guardian("WARN", f"Cannot verify existence for noDelete check: {path_preview}")
+            file_exists = True  # Fail-closed: assume exists on error
+        if file_exists:
+            log_guardian("BLOCK", f"No-delete path overwrite ({tool_name}): {path_preview}")
+            if is_dry_run():
+                log_guardian("DRY-RUN", f"Would DENY {tool_name} (no-delete overwrite)")
+                sys.exit(0)
+            reason = (
+                f"Protected from overwrite: {Path(file_path).name}"
+                "\nThis file is in noDeletePaths. Use Edit tool for partial modifications."
+            )
+            print(_json.dumps(deny_response(reason)))
+            sys.exit(0)
 
     # ========== Allow ==========
     log_guardian("ALLOW", f"{tool_name}: {path_preview}")

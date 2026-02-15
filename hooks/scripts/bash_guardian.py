@@ -959,6 +959,10 @@ def main() -> None:
     # Get project directory
     project_dir_str = get_project_dir()
     if not project_dir_str:
+        # SECURITY: No project dir = can't verify safety, deny by default
+        print("GUARDIAN WARN: No project dir set, failing closed for bash guardian", file=sys.stderr)
+        reason = "Guardian cannot verify command safety: project directory not set"
+        print(json.dumps(deny_response(reason)))
         sys.exit(0)
     project_dir = Path(project_dir_str)
 

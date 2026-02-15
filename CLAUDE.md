@@ -33,9 +33,9 @@ Hooks into Bash, Edit, Read, Write (PreToolUse) and Stop (auto-commit) events.
 
 These are the most critical untested paths. See `TEST-PLAN.md` for the full action plan.
 
-1. **Fail-open exception paths**: `is_symlink_escape()` (`_guardian_utils.py:927`) returns `False` on exception; `is_path_within_project()` (`_guardian_utils.py:974`) returns `True` on exception. Both undermine fail-closed semantics -- crafted paths that trigger `OSError` bypass protections.
-2. **Auto-commit `--no-verify`**: `auto_commit.py:145` unconditionally bypasses pre-commit hooks. Combined with `includeUntracked=true`, can commit secrets.
-3. **Zero test coverage**: `edit_guardian.py`, `read_guardian.py`, `write_guardian.py`, and `auto_commit.py` have no tests at all.
+1. **Auto-commit `--no-verify`**: `auto_commit.py:145` unconditionally bypasses pre-commit hooks. Combined with `includeUntracked=true`, can commit secrets.
+2. **Limited test coverage**: `auto_commit.py` has no tests. `edit_guardian.py`, `read_guardian.py`, `write_guardian.py` are thin wrappers now tested via subprocess integration in `tests/security/test_p0p1_failclosed.py`.
+3. **Normalization helpers fail-open**: `expand_path()`, `normalize_path()`, and `normalize_path_for_matching()` return unresolved paths on exception. Defense-in-depth via independent checks mitigates risk, but a hardening pass should make these fail-closed.
 
 ### Coverage Gaps by Script
 
