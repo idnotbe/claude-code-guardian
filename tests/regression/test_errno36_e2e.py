@@ -194,10 +194,12 @@ for img in assets/**/*.png; do
 done"""
     ),
     (
-        "Long token (JWT in curl)",
-        """curl -X POST https://api.production.service/v1/deploy \\
+        "Long token (JWT-like in curl)",
+        # NOTE: Intentionally fake JWT structure for regression testing.
+        # Do not replace with a real token. See: GitGuardian incident 2026-02.
+        """curl -X POST https://api.example.test/v1/deploy \\
   -H "Content-Type: application/json" \\
-  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c" \\
+  -H "Authorization: Bearer eyJhbGciOiAibm9uZSIsICJ0eXAiOiAiSldUIn0.eyJzdWIiOiAiMDAwMDAwMDAwMCIsICJuYW1lIjogIkZBS0UtVE9LRU4tRk9SLVRFU1RJTkctT05MWSIsICJpYXQiOiAwfQ.FAKE_SIGNATURE_FOR_TESTING_DO_NOT_USE_000000000" \\
   -d '{"deploy_id": "982374-af823-1234", "force": true}'"""
     ),
     (
