@@ -16,7 +16,8 @@ Complete documentation for `config.json` -- the Guardian configuration file.
   "noDeletePaths": [ ... ],
   "allowedExternalReadPaths": [ ... ],
   "allowedExternalWritePaths": [ ... ],
-  "gitIntegration": { ... }
+  "gitIntegration": { ... },
+  "bashPathScan": { ... }
 }
 ```
 
@@ -58,6 +59,7 @@ Controls what happens when a hook times out or encounters an error. **Fail-close
 - `"ask"` prompts the user for a decision on each occurrence
 - `"allow"` silently permits the operation -- use only if false positives are frequent and acceptable
 - Increase `timeoutSeconds` only if your machine is slow (hooks are lightweight, 10s is generous)
+- **Note:** `timeoutSeconds` is not enforced as a blanket hook-level timeout. Individual subprocess calls have their own timeouts. This is by design to avoid corrupting git state during operations.
 
 ---
 
@@ -147,6 +149,8 @@ Files that can be read but not written or deleted. Protects generated/managed fi
 
 Files that can be read and written but not deleted. Protects critical project files.
 
+**Limitation:** `noDeletePaths` is only enforced for Bash delete commands (`rm`, `git rm`, etc.) and Write tool overwrites of existing files. The Edit tool can still modify file contents. For full write protection, use `readOnlyPaths` instead.
+
 ```json
 "noDeletePaths": [
   ".gitignore",
@@ -196,7 +200,7 @@ All path arrays use glob patterns with these rules:
 
 **Important notes:**
 - Patterns are matched against the file path relative to the project root
-- Patterns are case-sensitive on Linux/macOS, case-insensitive on Windows
+- Patterns are case-sensitive on Linux, case-insensitive on Windows and macOS
 - Use forward slashes (`/`) even on Windows -- the engine normalizes paths
 - `**` must be used for recursive directory matching; `dir/*` only matches immediate children
 
@@ -270,9 +274,39 @@ Git author identity used for Guardian auto-commits. Separates automated commits 
 
 ---
 
+## bashPathScan
+
+Layer 1 defense: scans bash command strings for references to protected file names using word-boundary matching. This catches indirect references like `python3 script.py --file .env` that regex pattern matching might miss.
+
+| Field | Type | Default | Values | Description |
+|-------|------|---------|--------|-------------|
+| `enabled` | boolean | `true` | | Enable/disable the path scan layer |
+| `scanTiers` | array of strings | `["zeroAccess"]` | `"zeroAccess"`, `"readOnly"`, `"noDelete"` | Which protection tiers to scan for in bash commands |
+| `exactMatchAction` | string | `"ask"` | `"deny"`, `"ask"` | Action when an exact protected filename is found |
+| `patternMatchAction` | string | `"ask"` | `"deny"`, `"ask"` | Action when a glob-derived pattern match is found |
+
+```json
+"bashPathScan": {
+  "enabled": true,
+  "scanTiers": ["zeroAccess"],
+  "exactMatchAction": "ask",
+  "patternMatchAction": "ask"
+}
+```
+
+**Guidance:**
+- The default scans only `zeroAccess` tier -- expand `scanTiers` to `["zeroAccess", "readOnly", "noDelete"]` for broader coverage at the cost of more prompts
+- Set `exactMatchAction` to `"deny"` for stricter enforcement of exact filename matches (e.g., `.env` found literally in the command)
+- `patternMatchAction` covers matches derived from glob patterns (e.g., `.pem` suffix from `*.pem`)
+- This scan is a separate layer from regex pattern matching and provides defense-in-depth
+
+---
+
 ## Regex Pattern Cookbook
 
 Copy-paste patterns for common guarding scenarios.
+
+> **Note:** Many common patterns (e.g., `rm -rf`, `.env` blocking, force push, SQL destructive ops) are already included in the default configuration (`assets/guardian.default.json`). You only need to add them to your custom config if you have removed or overridden the defaults. The patterns below are for additional scenarios beyond the defaults.
 
 ### Package Management
 ```json

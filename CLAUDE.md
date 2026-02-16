@@ -7,8 +7,8 @@ Hooks into Bash, Edit, Read, Write (PreToolUse) and Stop (auto-commit) events.
 
 ## Repository Layout
 
-- `hooks/scripts/` -- All guardian logic (6 Python files, ~3,900 LOC total)
-- `tests/` -- Test suite (~1,009 methods across 6 subdirectories). See `tests/README.md` for details.
+- `hooks/scripts/` -- All guardian logic (6 Python files, ~4,142 LOC total)
+- `tests/` -- Test suite (~631 methods across 7 subdirectories). See `tests/README.md` for details.
 - `assets/` -- Default config and JSON schema
 - `commands/`, `skills/`, `agents/` -- Plugin UX (init wizard, config guide, assistant)
 
@@ -33,19 +33,19 @@ Hooks into Bash, Edit, Read, Write (PreToolUse) and Stop (auto-commit) events.
 
 These are the most critical untested paths. See `TEST-PLAN.md` for the full action plan.
 
-1. **Auto-commit `--no-verify`**: `auto_commit.py:145` unconditionally bypasses pre-commit hooks. Combined with `includeUntracked=true`, can commit secrets.
-2. **Limited test coverage**: `auto_commit.py` has no tests. `edit_guardian.py`, `read_guardian.py`, `write_guardian.py` are thin wrappers now tested via subprocess integration in `tests/security/test_p0p1_failclosed.py`.
+1. **Auto-commit `--no-verify`**: `auto_commit.py:146` unconditionally bypasses pre-commit hooks. Combined with `includeUntracked=true`, can commit secrets.
+2. **Limited test coverage**: `auto_commit.py` has no tests. `edit_guardian.py`, `read_guardian.py`, `write_guardian.py` are thin wrappers with basic subprocess integration tests in `tests/security/test_p0p1_failclosed.py`.
 3. **Normalization helpers fail-open**: `expand_path()`, `normalize_path()`, and `normalize_path_for_matching()` return unresolved paths on exception. Defense-in-depth via independent checks mitigates risk, but a hardening pass should make these fail-closed.
 
 ### Coverage Gaps by Script
 
 | Script | LOC | Test Coverage |
 |--------|-----|---------------|
-| `bash_guardian.py` | 1,231 | Extensive (core + security + regression + usability suites) |
-| `_guardian_utils.py` | 2,308 | Partial (functions tested via bash_guardian; path guardian paths untested) |
-| `edit_guardian.py` | 75 | None |
-| `read_guardian.py` | 71 | None |
-| `write_guardian.py` | 75 | None |
+| `bash_guardian.py` | 1,289 | Extensive (core + security + regression + usability suites) |
+| `_guardian_utils.py` | 2,426 | Partial (functions tested via bash_guardian; path guardian paths covered by subprocess integration tests) |
+| `edit_guardian.py` | 86 | Basic (subprocess integration in `tests/security/test_p0p1_failclosed.py`) |
+| `read_guardian.py` | 82 | Basic (subprocess integration in `tests/security/test_p0p1_failclosed.py`) |
+| `write_guardian.py` | 86 | Basic (subprocess integration in `tests/security/test_p0p1_failclosed.py`) |
 | `auto_commit.py` | 173 | None |
 
 ## Quick Reference
