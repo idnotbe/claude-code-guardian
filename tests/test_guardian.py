@@ -95,9 +95,9 @@ def setup_test_environment():
         "bashToolPatterns": {
             "block": [
                 {"pattern": r"rm\s+-[rRf]+\s+/(?:\s*$|\*)", "reason": "Root deletion"},
-                {"pattern": r"(?i)(?:rm|rmdir|del).*\.git(?:\s|/|$)", "reason": "Git deletion"},
+                {"pattern": r"(?i)(?:^\s*|[;|&`({]\s*)(?:rm|rmdir|del|delete|deletion|remove-item)\b\s+.*\.git(?:\s|/|[;&|)`'\"]|$)", "reason": "Git deletion"},
                 {
-                    "pattern": r"(?i)(?:rm|rmdir|del).*_archive(?:\s|/|$)",
+                    "pattern": r"(?i)(?:^\s*|[;|&`({]\s*)(?:rm|rmdir|del|delete|deletion|remove-item)\b\s+.*_archive(?:\s|/|[;&|)`'\"]|$)",
                     "reason": "Archive deletion",
                 },
                 {"pattern": r"git\s+push\s+(?:--force|-f)", "reason": "Force push"},

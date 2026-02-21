@@ -14,15 +14,15 @@
         "reason": "Root or full system deletion"
       },
       {
-        "pattern": "(?i)(?:rm|rmdir|del|remove-item).*\\.git(?:\\s|/|$)",
+        "pattern": "(?i)(?:^\\s*|[;|&`({]\\s*)(?:rm|rmdir|del|delete|deletion|remove-item)\\b\\s+.*\\.git(?:\\s|/|[;&|)`'\"]|$)",
         "reason": "Git repository deletion"
       },
       {
-        "pattern": "(?i)(?:rm|rmdir|del|remove-item).*\\.claude(?:\\s|/|$)",
+        "pattern": "(?i)(?:^\\s*|[;|&`({]\\s*)(?:rm|rmdir|del|delete|deletion|remove-item)\\b\\s+.*\\.claude(?:\\s|/|[;&|)`'\"]|$)",
         "reason": "Claude configuration deletion"
       },
       {
-        "pattern": "(?i)(?:rm|rmdir|del|remove-item).*_archive(?:\\s|/|$)",
+        "pattern": "(?i)(?:^\\s*|[;|&`({]\\s*)(?:rm|rmdir|del|delete|deletion|remove-item)\\b\\s+.*_archive(?:\\s|/|[;&|)`'\"]|$)",
         "reason": "Backup archive deletion"
       },
       {

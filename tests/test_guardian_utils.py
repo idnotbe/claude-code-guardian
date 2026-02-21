@@ -53,9 +53,9 @@ def setup_test_environment():
         "bashToolPatterns": {
             "block": [
                 {"pattern": r"rm\s+-[rRf]*\s+/(?:\s*$|\*)", "reason": "Root deletion"},
-                {"pattern": r"(?i)(?:rm|rmdir|del).*\.git(?:\s|/|$)", "reason": "Git deletion"},
+                {"pattern": r"(?i)(?:^\s*|[;|&`({]\s*)(?:rm|rmdir|del|delete|deletion|remove-item)\b\s+.*\.git(?:\s|/|[;&|)`'\"]|$)", "reason": "Git deletion"},
                 {
-                    "pattern": r"(?i)(?:rm|rmdir|del).*\.claude(?:\s|/|$)",
+                    "pattern": r"(?i)(?:^\s*|[;|&`({]\s*)(?:rm|rmdir|del|delete|deletion|remove-item)\b\s+.*\.claude(?:\s|/|[;&|)`'\"]|$)",
                     "reason": "Claude deletion",
                 },
                 {"pattern": r"git\s+push\s[^;|&\n]*(?:--force(?!-with-lease)|-f\b)", "reason": "Force push"},
@@ -208,6 +208,16 @@ def test_block_patterns(results: TestResults):
         ("git reflog expire --all", True, "Reflog expire --all"),
         ("git reflog expire --expire=now --all", True, "Reflog expire now"),
         ("git reflog delete HEAD@{1}", True, "Reflog delete entry"),
+        # True positive: standalone delete command MUST be blocked
+        ("delete .claude/config", True, "delete as standalone command must be blocked"),
+        # Phase 2 hardening: leading whitespace
+        ("  rm .claude/config", True, "leading spaces before rm must be blocked"),
+        ("\trm .claude/config", True, "leading tab before rm must be blocked"),
+        # Phase 2 hardening: brace group
+        ("{ rm .claude/x; }", True, "brace group rm must be blocked"),
+        # Phase 2 hardening: quoted paths
+        ('rm ".claude/config"', True, "quoted path must be blocked"),
+        ("rm '.claude/config'", True, "single-quoted path must be blocked"),
     ]
 
     # Should not block
@@ -219,6 +229,9 @@ def test_block_patterns(results: TestResults):
         ("$(echo hello)", False, "Command substitution safe"),
         ("git reflog", False, "Reflog show (safe)"),
         ("git reflog show", False, "Reflog show explicit"),
+        # False positive regression: memory_write.py --action delete must NOT be blocked
+        ("python3 memory_write.py --action delete .claude/memory/MEMORY.md", False,
+         "delete as argument flag should not trigger block"),
     ]
 
     for cmd, expected, desc in tests_block + tests_allow:

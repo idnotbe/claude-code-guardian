@@ -371,15 +371,15 @@ _FALLBACK_CONFIG = {
         "block": [
             {"pattern": r"rm\s+-[rRf]+\s+/(?:\s*$|\*)", "reason": "[FALLBACK] Root deletion"},
             {
-                "pattern": r"(?i)(?:rm|rmdir|del).*\.git(?:\s|/|$)",
+                "pattern": r"(?i)(?:^\s*|[;|&`({]\s*)(?:rm|rmdir|del|delete|deletion|remove-item)\b\s+.*\.git(?:\s|/|[;&|)`'\"]|$)",
                 "reason": "[FALLBACK] Git deletion",
             },
             {
-                "pattern": r"(?i)(?:rm|rmdir|del).*\.claude(?:\s|/|$)",
+                "pattern": r"(?i)(?:^\s*|[;|&`({]\s*)(?:rm|rmdir|del|delete|deletion|remove-item)\b\s+.*\.claude(?:\s|/|[;&|)`'\"]|$)",
                 "reason": "[FALLBACK] Claude deletion",
             },
             {
-                "pattern": r"(?i)(?:rm|rmdir|del).*_archive(?:\s|/|$)",
+                "pattern": r"(?i)(?:^\s*|[;|&`({]\s*)(?:rm|rmdir|del|delete|deletion|remove-item)\b\s+.*_archive(?:\s|/|[;&|)`'\"]|$)",
                 "reason": "[FALLBACK] Archive deletion",
             },
             {"pattern": r"git\s+push\s[^;|&\n]*(?:--force(?!-with-lease)|-f\b)", "reason": "[FALLBACK] Force push"},
