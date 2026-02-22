@@ -111,6 +111,8 @@ def split_commands(command: str) -> list[str]:
     in_double_quote = False
     in_backtick = False
     i = 0
+    pending_heredocs: list[tuple[str, bool]] = []  # (delimiter, strip_tabs)
+    arithmetic_depth = 0  # tracks (( ... )) nesting for arithmetic context
 
     while i < len(command):
         c = command[i]
@@ -226,11 +228,54 @@ def split_commands(command: str) -> list[str]:
                 current = []
                 i += 1
                 continue
+            # Track arithmetic context: (( ... ))
+            # This prevents << inside (( )) from being misdetected as heredoc.
+            # Note: $(( is already handled by the existing depth tracking
+            # (the $( part increments depth), so we only need to catch bare ((.
+            if (command[i:i+2] == '(('
+                    and (i == 0 or command[i-1] not in ('$', '<', '>'))):
+                arithmetic_depth += 1
+                current.append('((')
+                i += 2
+                continue
+
+            if command[i:i+2] == '))' and arithmetic_depth > 0:
+                arithmetic_depth -= 1
+                current.append('))')
+                i += 2
+                continue
+
+            # Detect heredoc operator: << or <<- (but NOT <<< here-string)
+            # Only detect when outside arithmetic context (arithmetic_depth == 0)
+            if (command[i:i+2] == '<<'
+                    and command[i:i+3] != '<<<'
+                    and arithmetic_depth == 0):
+
+                strip_tabs = command[i:i+3] == '<<-'
+                op_len = 3 if strip_tabs else 2
+                current.append(command[i:i+op_len])
+                i += op_len
+
+                # Skip optional whitespace between << and delimiter
+                while i < len(command) and command[i] in ' \t':
+                    current.append(command[i])
+                    i += 1
+
+                # Parse delimiter word: bare, 'quoted', or "quoted"
+                delim, raw_token, i = _parse_heredoc_delimiter(command, i)
+                current.append(raw_token)
+                pending_heredocs.append((delim, strip_tabs))
+                continue
+
             # Newline
             if c == "\n":
                 sub_commands.append("".join(current).strip())
                 current = []
                 i += 1
+                # Consume heredoc bodies after newline
+                if pending_heredocs:
+                    i = _consume_heredoc_bodies(command, i, pending_heredocs)
+                    pending_heredocs = []
                 continue
 
         current.append(c)
@@ -243,6 +288,72 @@ def split_commands(command: str) -> list[str]:
 
     # Filter empty strings
     return [cmd for cmd in sub_commands if cmd]
+
+
+def _parse_heredoc_delimiter(command: str, i: int) -> tuple[str, str, int]:
+    """Parse heredoc delimiter word from position i.
+
+    Handles:
+      - Bare word: EOF, EOFZ, END_MARKER
+      - Single-quoted: 'EOF' (literal heredoc, no expansion)
+      - Double-quoted: "EOF" (expansion-active heredoc)
+
+    Returns: (delimiter_text, raw_token, new_position)
+    """
+    if i >= len(command):
+        return ('', '', i)
+
+    if command[i] in ("'", '"'):
+        quote_char = command[i]
+        start = i
+        i += 1
+        while i < len(command) and command[i] != quote_char:
+            i += 1
+        if i < len(command):
+            i += 1  # consume closing quote
+        raw_token = command[start:i]
+        delim = raw_token[1:-1]  # strip quotes
+        return (delim, raw_token, i)
+
+    # Bare word: consume until whitespace, newline, or shell metachar
+    start = i
+    while i < len(command) and command[i] not in ' \t\n;|&<>()':
+        i += 1
+    raw_token = command[start:i]
+    return (raw_token, raw_token, i)
+
+
+def _consume_heredoc_bodies(command: str, i: int,
+                             pending: list[tuple[str, bool]]) -> int:
+    """Consume heredoc body lines until each delimiter is matched.
+
+    For each pending heredoc, reads lines until a line matches the
+    delimiter exactly (after optional tab-stripping for <<-).
+
+    Returns: new position after all heredoc bodies consumed.
+    """
+    for delim, strip_tabs in pending:
+        while i < len(command):
+            # Find end of current line
+            line_start = i
+            while i < len(command) and command[i] != '\n':
+                i += 1
+            line = command[line_start:i]
+
+            # Advance past newline
+            if i < len(command):
+                i += 1
+
+            # Check if this line matches the delimiter
+            cmp_line = line.rstrip('\r')
+            if strip_tabs:
+                cmp_line = cmp_line.lstrip('\t')
+            if cmp_line == delim:
+                break
+        # If we exhaust the input without finding the delimiter,
+        # we've consumed an unterminated heredoc -- body lines
+        # won't leak to sub-commands (fail-closed behavior)
+    return i
 
 
 # ============================================================
@@ -648,23 +759,27 @@ def is_write_command(command: str) -> bool:
         True if command appears to write or modify files.
     """
     write_patterns = [
-        r">\s*['\"]?[^|&;]+",  # Redirection (existing)
-        r"\btee\s+",  # tee (with word boundary)
-        r"\bmv\s+",  # mv (with word boundary)
-        r"(?<![A-Za-z-])ln\s+",  # F2: ln (negative lookbehind prevents ls -ln false positive)
-        r"\bsed\s+.*-[^-]*i",  # sed with -i (in-place edit)
-        r"\bcp\s+",  # cp (destination is a write)
-        r"\bdd\s+",  # dd
-        r"\bpatch\b",  # patch
-        r"\brsync\s+",  # rsync
-        r":\s*>",  # Truncation via : > file
-        # P1-4: Metadata-modifying commands (count as write for readOnly)
-        r"\bchmod\s+",
-        r"\btouch\s+",
-        r"\bchown\s+",
-        r"\bchgrp\s+",
+        (r">\s*['\"]?[^|&;>]+", True),   # Redirection -- needs quote check
+        (r"\btee\s+", False),
+        (r"\bmv\s+", False),
+        (r"(?<![A-Za-z-])ln\s+", False),
+        (r"\bsed\s+.*-[^-]*i", False),
+        (r"\bcp\s+", False),
+        (r"\bdd\s+", False),
+        (r"\bpatch\b", False),
+        (r"\brsync\s+", False),
+        (r":\s*>", True),                  # Truncation -- needs quote check
+        (r"\bchmod\s+", False),
+        (r"\btouch\s+", False),
+        (r"\bchown\s+", False),
+        (r"\bchgrp\s+", False),
     ]
-    return any(re.search(p, command, re.IGNORECASE) for p in write_patterns)
+    for pattern, needs_quote_check in write_patterns:
+        for match in re.finditer(pattern, command, re.IGNORECASE):
+            if needs_quote_check and _is_inside_quotes(command, match.start()):
+                continue  # Skip this occurrence: > is inside a quoted string
+            return True
+    return False
 
 
 def is_within_project(path: Path, project_dir: Path) -> bool:
@@ -1005,14 +1120,20 @@ def main() -> None:
     if needs_ask:
         final_verdict = _stronger_verdict(final_verdict, ("ask", ask_reason))
 
+    # ========== Layer 2: Command Decomposition (moved before Layer 1) ==========
+    sub_commands = split_commands(command)
+
     # ========== Layer 1: Protected Path Scan ==========
-    scan_verdict, scan_reason = scan_protected_paths(command, config)
+    # Scan joined sub-commands instead of raw command string.
+    # After heredoc-aware split_commands(), heredoc body content is excluded,
+    # so .env/.pem in heredoc bodies no longer trigger false positives.
+    scan_text = ' '.join(sub_commands)
+    scan_verdict, scan_reason = scan_protected_paths(scan_text, config)
     if scan_verdict != "allow":
         final_verdict = _stronger_verdict(final_verdict, (scan_verdict, scan_reason))
         log_guardian("SCAN", f"Layer 1 {scan_verdict}: {scan_reason}")
 
-    # ========== Layer 2+3+4: Command Decomposition + Path Analysis ==========
-    sub_commands = split_commands(command)
+    # ========== Layer 3+4: Per-Sub-Command Analysis ==========
     all_paths: list[Path] = []  # Collect all paths for archive step
 
     for sub_cmd in sub_commands:

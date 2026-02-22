@@ -1,6 +1,6 @@
 {
   "name": "claude-code-guardian",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Hook-based security guardrails for Claude Code's --dangerously-skip-permissions mode. Blocks destructive commands, protects secrets, and auto-commits safety checkpoints.",
   "author": {
     "name": "idnotbe",
