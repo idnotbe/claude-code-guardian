@@ -1,3 +1,8 @@
+---
+status: done
+progress: "완료. 커밋 89746ad"
+---
+
 # Team Plan: Guardian Regex Fix
 
 ## Task Summary

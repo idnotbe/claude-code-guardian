@@ -1,0 +1,369 @@
+{
+  "$schema": "./guardian.schema.json",
+  "$comment": "Claude Code Guardian - Recommended Configuration v1.0.1. A batteries-included security config for Claude Code's --dangerously-skip-permissions mode. For help, run '/guardian:config-guide' in Claude Code or see skills/config-guide/references/schema-reference.md. | SECTIONS: hookBehavior = what happens on errors/timeouts (deny = fail-closed, safe default). gitIntegration = auto-commit checkpoints and git identity (identity is ONLY for Guardian checkpoints, not your normal commits). zeroAccessPaths = secrets and credentials -- completely off-limits (no read, write, or delete). readOnlyPaths = generated/vendored files (read OK, no write). noDeletePaths = critical project files (edit OK, no delete). allowedExternalReadPaths = paths outside your project that Claude can read (empty by default -- add cross-project paths like '~/other-repo/src/**'). allowedExternalWritePaths = paths outside your project Claude can write (includes ~/.claude/plans/ for Claude Code plan mode). bashPathScan = extra layer that scans bash commands for references to protected filenames (e.g., catches 'cat .env' even if it isn't a deletion command). bashToolPatterns = regex rules for bash commands (block = always denied, ask = prompt for confirmation; patterns are advanced -- most users only need to customize the path lists above). | SAFETY NOTES: includeUntracked is false to prevent auto-committing secrets that haven't been .gitignored yet. hookBehavior uses 'deny' to fail-closed on errors. | TO ADD A CUSTOM RULE: add {\"pattern\": \"your-regex\", \"reason\": \"why\"} to the block or ask array. Test patterns at regex101.com.",
+  "version": "1.0.1",
+  "hookBehavior": {
+    "onTimeout": "deny",
+    "onError": "deny",
+    "timeoutSeconds": 10
+  },
+  "gitIntegration": {
+    "autoCommit": {
+      "enabled": true,
+      "onStop": true,
+      "messagePrefix": "auto-checkpoint",
+      "includeUntracked": false
+    },
+    "preCommitOnDangerous": {
+      "enabled": true,
+      "messagePrefix": "pre-danger-checkpoint"
+    },
+    "identity": {
+      "email": "guardian@claude-code.local",
+      "name": "Guardian Auto-Commit"
+    }
+  },
+  "zeroAccessPaths": [
+    ".env",
+    ".env.*",
+    ".env*.local",
+    "*.env",
+    "*.pem",
+    "*.key",
+    "*.pfx",
+    "*.p12",
+    "id_rsa",
+    "id_rsa.*",
+    "id_ed25519",
+    "id_ed25519.*",
+    "~/.ssh/**",
+    "~/.gnupg/**",
+    "~/.aws/**",
+    "~/.config/gcloud/**",
+    "~/.azure/**",
+    "~/.kube/**",
+    "*credentials*.json",
+    "*serviceAccount*.json",
+    "firebase-adminsdk*.json",
+    "*.tfstate",
+    "*.tfstate.backup",
+    ".terraform/**",
+    "secrets.yaml",
+    "secrets.yml",
+    "secrets.json",
+    ".mcp.json",
+    ".mcp.json.bak",
+    "~/.npmrc",
+    "~/.pypirc",
+    "~/.bashrc",
+    "~/.bash_profile",
+    "~/.bash_login",
+    "~/.zshrc",
+    "~/.profile",
+    "~/.zprofile",
+    "~/.docker/config.json",
+    "~/.vault-token",
+    "~/.netrc",
+    "~/.config/gh/hosts.yml"
+  ],
+  "readOnlyPaths": [
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "poetry.lock",
+    "Pipfile.lock",
+    "Cargo.lock",
+    "Gemfile.lock",
+    "composer.lock",
+    "go.sum",
+    "*.lock",
+    "node_modules/**",
+    "dist/**",
+    "build/**",
+    "__pycache__/**",
+    ".venv/**",
+    "venv/**",
+    "target/**",
+    "vendor/**",
+    ".git/hooks/**"
+  ],
+  "noDeletePaths": [
+    ".git",
+    ".git/**",
+    ".claude",
+    ".claude/**",
+    "_archive",
+    "_archive/**",
+    ".gitignore",
+    ".gitattributes",
+    ".gitmodules",
+    "CLAUDE.md",
+    "LICENSE",
+    "LICENSE.*",
+    "README.md",
+    "README.*",
+    "CONTRIBUTING.md",
+    "CHANGELOG.md",
+    "SECURITY.md",
+    ".github/**",
+    ".gitlab-ci.yml",
+    "Jenkinsfile",
+    ".circleci/**",
+    "azure-pipelines.yml",
+    "Dockerfile",
+    "Dockerfile.*",
+    "docker-compose*.yml",
+    "docker-compose*.yaml",
+    ".dockerignore",
+    "Makefile",
+    "pyproject.toml",
+    "package.json",
+    "tsconfig.json",
+    "Cargo.toml",
+    "go.mod"
+  ],
+  "allowedExternalReadPaths": [],
+  "allowedExternalWritePaths": [
+    "~/.claude/plans",
+    "~/.claude/plans/**"
+  ],
+  "bashPathScan": {
+    "enabled": true,
+    "scanTiers": [
+      "zeroAccess"
+    ],
+    "exactMatchAction": "ask",
+    "patternMatchAction": "ask"
+  },
+  "bashToolPatterns": {
+    "$comment": "Regex rules for bash commands. BLOCK = always denied (no override). ASK = user must confirm. Patterns checked in order: block first, then ask. Reason fields describe what the pattern catches and why it is blocked. Most users do not need to edit these -- customize the path lists above instead.",
+    "block": [
+      {
+        "pattern": "rm\\s+-[rRf]+\\s+/(?:\\s*$|\\*|\\s+)",
+        "reason": "Blocks 'rm -rf /' and variants -- root filesystem deletion (catastrophic, unrecoverable)"
+      },
+      {
+        "pattern": "rm\\s+(?:--(?:recursive|force|no-preserve-root)\\s+)+/(?:\\s*$|\\*|\\s+)",
+        "reason": "Blocks 'rm --recursive --force /' -- root filesystem deletion using long flags"
+      },
+      {
+        "pattern": "(?i)(?:^\\s*|[;|&`({]\\s*)(?:rm|rmdir|del|delete|deletion|remove-item)\\b\\s+.*\\.git(?:\\s|/|[;&|)`'\"]|$)",
+        "reason": "Blocks 'rm .git' and similar -- git repository deletion (unrecoverable without remote)"
+      },
+      {
+        "pattern": "(?i)(?:^\\s*|[;|&`({]\\s*)(?:rm|rmdir|del|delete|deletion|remove-item)\\b\\s+.*\\.claude(?:\\s|/|[;&|)`'\"]|$)",
+        "reason": "Blocks 'rm .claude' and similar -- Claude configuration deletion"
+      },
+      {
+        "pattern": "(?i)(?:^\\s*|[;|&`({]\\s*)(?:rm|rmdir|del|delete|deletion|remove-item)\\b\\s+.*_archive(?:\\s|/|[;&|)`'\"]|$)",
+        "reason": "Blocks 'rm _archive' and similar -- backup archive deletion"
+      },
+      {
+        "pattern": "git\\s+push\\s[^;|&\\n]*(?:--force(?!-with-lease)|-f\\b)",
+        "reason": "Blocks 'git push --force' -- rewrites remote history, can lose others' work"
+      },
+      {
+        "pattern": "git\\s+filter-branch",
+        "reason": "Blocks 'git filter-branch' -- irreversible history rewriting"
+      },
+      {
+        "pattern": "git\\s+reflog\\s+(?:expire|delete)",
+        "reason": "Blocks 'git reflog expire/delete' -- destroys recovery history (irreversible)"
+      },
+      {
+        "pattern": "(?i)find\\s+.*\\s+-delete",
+        "reason": "Blocks 'find ... -delete' -- bulk file removal"
+      },
+      {
+        "pattern": "shred\\s+",
+        "reason": "Blocks 'shred' -- permanently destroys files beyond recovery (use rm instead, which Guardian can monitor)"
+      },
+      {
+        "pattern": "(?:curl|wget)[^|]*\\|\\s*(?:(?:[\\w./-]+/)?(?:env\\s+))?(?:[\\w./-]+/)?(?:bash|sh|zsh|python[23]?|perl|ruby|node)(?:\\s|$)",
+        "reason": "Blocks 'curl ... | bash' -- remote script execution, including absolute-path interpreters (e.g., | /bin/bash, | /usr/bin/env bash)"
+      },
+      {
+        "pattern": ":\\s*\\(\\s*\\)\\s*\\{[^}]{0,200}\\}\\s*;\\s*:",
+        "reason": "Blocks ':(){:|:&};:' (fork bomb) -- crashes the system by exhausting processes"
+      },
+      {
+        "pattern": "\\$\\([^)]*(?:rm|del|rmdir|shred)[^)]*\\)",
+        "reason": "Blocks deletion hidden inside $(...) command substitution"
+      },
+      {
+        "pattern": "`[^`]*(?:rm|del|rmdir|shred)[^`]*`",
+        "reason": "Blocks deletion hidden inside backtick substitution"
+      },
+      {
+        "pattern": "(?i)eval\\s+(?:['\"]\\s*)?(?:rm|del|rmdir|shred)",
+        "reason": "Blocks 'eval rm ...' -- deletion via eval (obfuscation technique)"
+      },
+      {
+        "pattern": "(?:py|python[23]?|python\\d[\\d.]*)\\s[^|&\\n]*(?:os\\.remove|os\\.unlink|shutil\\.rmtree|shutil\\.move|os\\.rmdir)",
+        "reason": "Blocks Python file deletion (os.remove, shutil.rmtree, etc.) -- use rm instead so Guardian can monitor it"
+      },
+      {
+        "pattern": "(?:py|python[23]?|python\\d[\\d.]*)\\s[^|&\\n]*pathlib\\.Path\\([^)]*\\)\\.unlink",
+        "reason": "Blocks Python pathlib deletion -- use rm instead so Guardian can monitor it"
+      },
+      {
+        "pattern": "(?:node|deno|bun)\\s[^|&\\n]*(?:unlinkSync|rmSync|rmdirSync|fs\\.unlink|fs\\.rm\\b|promises\\.unlink)",
+        "reason": "Blocks Node/Deno/Bun file deletion -- use rm instead so Guardian can monitor it"
+      },
+      {
+        "pattern": "(?:perl|ruby)\\s[^|&\\n]*(?:\\bunlink\\b|File\\.delete|FileUtils\\.rm)",
+        "reason": "Blocks Perl/Ruby file deletion -- use rm instead so Guardian can monitor it"
+      },
+      {
+        "pattern": "(?i)(?:nc|netcat|ncat)\\s.*(?:-e\\s|\\s/bin/(?:ba)?sh|\\s/bin/bash)",
+        "reason": "Blocks 'nc -e /bin/sh' -- reverse shell via netcat"
+      },
+      {
+        "pattern": "(?i)base64\\s+-d.*\\|\\s*(?:(?:[\\w./-]+/)?(?:env\\s+))?(?:[\\w./-]+/)?(?:bash|sh|zsh)(?:\\s|$)",
+        "reason": "Blocks 'base64 -d | bash' -- obfuscated script execution, including absolute-path interpreters"
+      },
+      {
+        "pattern": "(?i)mkfs\\.",
+        "reason": "Blocks 'mkfs.*' -- filesystem formatting (destroys all data on device)"
+      },
+      {
+        "pattern": "dd\\s+.*of=/dev/[a-z]",
+        "reason": "Blocks 'dd ... of=/dev/sda' -- raw disk overwrite (destroys data)"
+      },
+      {
+        "pattern": "/dev/(?:tcp|udp)/",
+        "reason": "Blocks '/dev/tcp' and '/dev/udp' -- network socket for reverse shell or data exfiltration"
+      },
+      {
+        "pattern": "(?i)xxd\\s+.*\\|\\s*(?:(?:[\\w./-]+/)?(?:env\\s+))?(?:[\\w./-]+/)?(?:bash|sh|zsh)(?:\\s|$)",
+        "reason": "Blocks 'xxd ... | bash' -- hex-decoded script execution, including absolute-path interpreters"
+      },
+      {
+        "pattern": "(?i)openssl\\s+enc.*\\|\\s*(?:(?:[\\w./-]+/)?(?:env\\s+))?(?:[\\w./-]+/)?(?:bash|sh|zsh)(?:\\s|$)",
+        "reason": "Blocks 'openssl enc ... | bash' -- encrypted/encoded script execution, including absolute-path interpreters"
+      },
+      {
+        "pattern": "\\b(?:LD_PRELOAD|DYLD_INSERT_LIBRARIES)\\+?\\s*=",
+        "reason": "Blocks LD_PRELOAD/DYLD_INSERT_LIBRARIES -- library injection that can intercept any system call"
+      }
+    ],
+    "ask": [
+      {
+        "pattern": "rm\\s+-[rRf]+",
+        "reason": "Recursive/force deletion -- review the target path before confirming"
+      },
+      {
+        "pattern": "(?i)del\\s+(?:/[sq]\\s+)*",
+        "reason": "Windows 'del' command -- review what is being deleted"
+      },
+      {
+        "pattern": "(?i)remove-item\\s+",
+        "reason": "PowerShell 'Remove-Item' -- review what is being removed"
+      },
+      {
+        "pattern": "git\\s+reset\\s+--hard",
+        "reason": "'git reset --hard' -- discards all uncommitted changes (cannot be undone)"
+      },
+      {
+        "pattern": "git\\s+clean\\s+-[fdxX]+",
+        "reason": "'git clean' -- permanently removes untracked files"
+      },
+      {
+        "pattern": "git\\s+checkout\\s+--\\s+\\.",
+        "reason": "'git checkout -- .' -- discards all working tree changes"
+      },
+      {
+        "pattern": "git\\s+stash\\s+drop",
+        "reason": "'git stash drop' -- permanently removes a stash entry"
+      },
+      {
+        "pattern": "git\\s+push\\s[^;|&\\n]*--force-with-lease",
+        "reason": "'git push --force-with-lease' -- safer than --force but still overwrites remote history"
+      },
+      {
+        "pattern": "git\\s+branch\\s+-[dD]",
+        "reason": "'git branch -d/-D' -- deletes a local branch"
+      },
+      {
+        "pattern": "truncate\\s+",
+        "reason": "'truncate' -- erases file contents (keeps the file but empties it)"
+      },
+      {
+        "pattern": "mv\\s+['\"]?(?:\\./)?\\.(env|git|claude)",
+        "reason": "Moving protected dotfiles (.env, .git, .claude) -- verify destination"
+      },
+      {
+        "pattern": "mv\\s+['\"]?CLAUDE\\.md",
+        "reason": "Moving CLAUDE.md -- this is your project's Claude Code configuration"
+      },
+      {
+        "pattern": "mv\\s+\\S+\\s+(?:\\.\\.[\\\\/]|/tmp/)",
+        "reason": "Moving files outside project or to /tmp -- verify this is intentional"
+      },
+      {
+        "pattern": "(?i)drop\\s+(?:table|database|index|schema)",
+        "reason": "SQL DROP -- permanently removes database objects"
+      },
+      {
+        "pattern": "(?i)truncate\\s+table",
+        "reason": "SQL TRUNCATE -- deletes all rows from a table"
+      },
+      {
+        "pattern": "(?i)delete\\s+from\\s+\\w+(?:\\s*;|\\s*$|\\s+--)",
+        "reason": "SQL DELETE without WHERE clause -- will delete all rows in the table"
+      },
+      {
+        "pattern": "find\\s+.*-exec\\s+(?:rm|del|shred)",
+        "reason": "'find -exec rm' -- bulk deletion, verify the find targets first"
+      },
+      {
+        "pattern": "xargs\\s+(?:rm|del|shred)",
+        "reason": "'xargs rm' -- piped bulk deletion, verify the input source first"
+      },
+      {
+        "pattern": "npm\\s+publish",
+        "reason": "'npm publish' -- publishes package to npm registry (public by default)"
+      },
+      {
+        "pattern": "(?:twine\\s+upload|python.*setup\\.py\\s+upload)",
+        "reason": "'twine upload' -- publishes package to PyPI"
+      },
+      {
+        "pattern": "cargo\\s+publish",
+        "reason": "'cargo publish' -- publishes crate to crates.io"
+      },
+      {
+        "pattern": "gem\\s+push",
+        "reason": "'gem push' -- publishes gem to RubyGems"
+      },
+      {
+        "pattern": "docker\\s+(?:system\\s+prune|image\\s+prune|container\\s+prune)",
+        "reason": "'docker prune' -- removes stopped containers, unused images, or build cache"
+      },
+      {
+        "pattern": "terraform\\s+(?:apply|destroy)",
+        "reason": "'terraform apply/destroy' -- modifies or destroys cloud infrastructure"
+      },
+      {
+        "pattern": "kubectl\\s+delete",
+        "reason": "'kubectl delete' -- removes Kubernetes resources"
+      },
+      {
+        "pattern": "chmod\\s+(?:777|a\\+[rwx]+)",
+        "reason": "'chmod 777' -- sets overly permissive file permissions (world-writable)"
+      },
+      {
+        "pattern": "sudo\\s+",
+        "reason": "'sudo' -- runs with root privileges, confirm this needs elevated access"
+      },
+      {
+        "pattern": "rm\\s+--(?:recursive|force|no-preserve-root)",
+        "reason": "'rm --recursive/--force' (long flags) -- same as 'rm -rf', review the target path"
+      },
+      {
+        "pattern": "\\bcrontab\\b(?!\\s+-l\\b)",
+        "reason": "'crontab' -- can install or modify scheduled tasks, confirm this is intended"
+      }
+    ]
+  }
+}

@@ -206,7 +206,7 @@ class TestF2_LnWritePattern(unittest.TestCase):
         """Verify ln pattern exists in is_write_command patterns."""
         with open(BASH_GUARDIAN_PATH) as f:
             content = f.read()
-        self.assertIn(r'\bln\s+', content)
+        self.assertIn(r'(?<![A-Za-z-])ln\s+', content)
 
 
 # ============================================================

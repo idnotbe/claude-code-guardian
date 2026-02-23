@@ -137,11 +137,7 @@ Without it, Guardian falls back to Python's standard `re` module (no timeout on 
    claude --plugin-dir /path/to/claude-code-guardian --dangerously-skip-permissions
    ```
 
-3. **Run the setup wizard** to create a project-tailored config:
-   ```
-   /guardian:init
-   ```
-   The wizard auto-detects your project type (Node.js, Python, Rust, Go, etc.) and generates appropriate security rules.
+3. **Guardian auto-activates** on your first session. It copies the recommended security config to `.claude/guardian/config.json` and prints a confirmation message. No setup commands required.
 
 4. **Verify Guardian is active** by asking Claude to run a known-blocked command:
    ```
@@ -149,7 +145,9 @@ Without it, Guardian falls back to Python's standard `re` module (no timeout on 
    ```
    Guardian should block this even if `.env` does not exist. If it succeeds silently, hooks are not active -- check your `--plugin-dir` path.
 
-> **Skipping setup**: If you don't run `/guardian:init`, Guardian uses built-in defaults from `assets/guardian.default.json`. These are secure but not project-tailored. Run `/guardian:init` anytime to customize.
+5. **Customize** (optional): Run `/guardian:init` to tailor the config to your project type, or ask Claude directly (e.g., `"block npm publish"`, `"allow reading ~/.config/myapp"`).
+
+> **How auto-activation works**: On each new session, Guardian checks if `.claude/guardian/config.json` exists. If not, it copies `assets/guardian.recommended.json` to that path. To opt out, create any config file at that path before your first session (even an empty `{}` file will prevent auto-activation). To re-activate, delete the file and start a new session.
 
 > **Testing config changes**: Use dry-run mode to test without blocking operations:
 > ```bash
@@ -439,10 +437,11 @@ See `skills/config-guide/references/schema-reference.md` for a complete regex co
 
 ### Architecture
 
-Guardian registers five hooks with Claude Code via `hooks/hooks.json`:
+Guardian registers six hooks with Claude Code via `hooks/hooks.json`:
 
 | Hook | Event | Script | Fail Mode |
 |------|-------|--------|-----------|
+| Auto-Activate | SessionStart: startup | `session_start.sh` | Fail-open (never blocks startup) |
 | Bash Guardian | PreToolUse: Bash | `bash_guardian.py` | Fail-closed (deny on error) |
 | Read Guardian | PreToolUse: Read | `read_guardian.py` | Fail-closed (deny on error) |
 | Edit Guardian | PreToolUse: Edit | `edit_guardian.py` | Fail-closed (deny on error) |
@@ -822,7 +821,7 @@ Valid values: `1`, `true`, `yes` (case-insensitive). Hooks log what they would d
 ## FAQ
 
 **Q: Does Guardian work without running `/guardian:init`?**
-A: Yes. Guardian uses built-in defaults from `assets/guardian.default.json` if no project config exists. The defaults protect common secret files and block destructive commands. `/guardian:init` creates a project-tailored config.
+A: Yes. Guardian auto-activates the recommended config on your first session. If auto-activation fails (e.g., read-only filesystem), Guardian falls back to built-in defaults from `assets/guardian.default.json`. `/guardian:init` is available for customization but not required.
 
 **Q: Can Claude modify Guardian's config to weaken security?**
 A: No. Guardian self-guards its config file. The Edit, Write, and Read tools are all blocked from accessing `.claude/guardian/config.json`. Config changes must be made by a human directly.
@@ -868,7 +867,7 @@ python3 tests/core/test_p0p1_comprehensive.py
 
 See `tests/README.md` for detailed test documentation including directory structure, category boundaries, and how to add new tests.
 
-See `TEST-PLAN.md` for the prioritized test action plan covering known coverage gaps.
+See `action-plans/test-plan.md` for the prioritized test action plan covering known coverage gaps.
 
 ## Requirements
 

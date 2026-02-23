@@ -314,14 +314,14 @@ print("=" * 60)
 # without the scanner catching it?
 
 # 2B-a. Glob with character class: .en[v]
-# scan_protected_paths does raw string matching -- ".env" won't appear
-test("obfuscation: cat .en[v] (glob char class) -- bypasses scan?",
-     scan("cat .en[v]"), "allow", "zeroAccess-bypass")
-# This IS a bypass of Layer 1 but needs Layer 3 to catch it
+# Fixed: scan_protected_paths now expands single-char bracket classes
+test("obfuscation: cat .en[v] (glob char class) -- caught by scan",
+     scan("cat .en[v]"), "deny", "zeroAccess")
 
 # 2B-b. Glob with ?: .en?
-test("obfuscation: cat .en? (glob ?) -- bypasses scan?",
-     scan("cat .en?"), "allow", "zeroAccess-bypass")
+# Fixed: scan_protected_paths now builds ?-aware regex for each literal
+test("obfuscation: cat .en? (glob ?) -- caught by scan",
+     scan("cat .en?"), "deny", "zeroAccess")
 
 # 2B-c. Pure variable expansion with no literal
 test("obfuscation: f=.env && cat $f (split into two cmds)",
@@ -343,10 +343,10 @@ test("obfuscation: eval 'cat .e''nv'",
      scan("eval 'cat .e''nv'"), "allow", "zeroAccess-bypass")
 # Split quotes make ".env" not appear as literal
 
-# 2B-g. Hex escape in $'...'
-test("obfuscation: cat $'\\056env' (octal/hex .env)",
-     scan("cat $'\\056env'"), "allow", "zeroAccess-bypass")
-# \056 = '.' so this becomes .env at runtime
+# 2B-g. Octal escape in $'...'
+# Fixed: scan_protected_paths now decodes ANSI-C $'...' sequences
+test("obfuscation: cat $'\\056env' (octal .env) -- caught by scan",
+     scan("cat $'\\056env'"), "deny", "zeroAccess")
 
 # 2B-h. Python one-liner to read
 test("obfuscation: python3 -c 'open(\".env\").read()'",
@@ -407,10 +407,10 @@ test("write: dd of=poetry.lock", is_write_command("dd if=/dev/zero of=poetry.loc
 test("not-write: cat poetry.lock", is_write_command("cat poetry.lock"), False, "readOnly")
 test("not-write: head poetry.lock", is_write_command("head poetry.lock"), False, "readOnly")
 
-# Bypass attempts for write detection
-test("write: chmod 777 poetry.lock (missed?)", is_write_command("chmod 777 poetry.lock"), False, "readOnly-bypass")
-test("write: chown user poetry.lock (missed?)", is_write_command("chown user poetry.lock"), False, "readOnly-bypass")
-test("write: touch poetry.lock (missed?)", is_write_command("touch poetry.lock"), False, "readOnly-bypass")
+# Write detection for metadata-modifying commands
+test("write: chmod 777 poetry.lock", is_write_command("chmod 777 poetry.lock"), True, "readOnly")
+test("write: chown user poetry.lock", is_write_command("chown user poetry.lock"), True, "readOnly")
+test("write: touch poetry.lock", is_write_command("touch poetry.lock"), True, "readOnly")
 test("write: truncate -s 0 poetry.lock", is_write_command("truncate -s 0 poetry.lock"), False, "readOnly-bypass")
 # Note: truncate IS in ask patterns but is_write_command doesn't catch it
 
@@ -431,8 +431,8 @@ test("delete: mv LICENSE /dev/null", is_delete_command("mv LICENSE /dev/null"), 
 test("delete: mv CLAUDE.md /tmp/ (not /dev/null)", is_delete_command("mv CLAUDE.md /tmp/"), False, "noDelete-bypass")
 # mv to /tmp is effectively deletion but not to /dev/null
 
-test("delete: > CLAUDE.md (truncate via redirect)", is_delete_command("> CLAUDE.md"), False, "noDelete-bypass")
-# Truncating to empty is effectively deletion
+test("delete: > CLAUDE.md (truncate via redirect)", is_delete_command("> CLAUDE.md"), True, "noDelete")
+# Standalone redirect truncation is detected as deletion
 
 test("delete: truncate -s 0 CLAUDE.md", is_delete_command("truncate -s 0 CLAUDE.md"), False, "noDelete-bypass")
 # truncate is caught by ask patterns but not is_delete_command
@@ -443,9 +443,9 @@ test("delete: cp /dev/null CLAUDE.md", is_delete_command("cp /dev/null CLAUDE.md
 test("delete: python3 -c 'import os; os.unlink(\"CLAUDE.md\")'",
      is_delete_command("python3 -c 'import os; os.unlink(\"CLAUDE.md\")'"), True, "noDelete")
 
-test("delete: git rm CLAUDE.md (missed?)",
-     is_delete_command("git rm CLAUDE.md"), False, "noDelete-bypass")
-# git rm deletes files but is_delete_command doesn't check for it
+test("delete: git rm CLAUDE.md",
+     is_delete_command("git rm CLAUDE.md"), True, "noDelete")
+# git rm is detected as a delete operation
 
 test("delete: git clean -f (missed?)",
      is_delete_command("git clean -f"), False, "noDelete-bypass")

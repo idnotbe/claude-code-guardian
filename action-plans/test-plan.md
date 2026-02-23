@@ -1,3 +1,8 @@
+---
+status: active
+progress: "P0 일부 완료, P1/P2 대부분 미착수"
+---
+
 # TEST-PLAN.md -- Guardian Test Action Plan
 
 Distilled from audit and security review. Prioritized by security impact.

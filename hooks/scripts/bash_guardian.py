@@ -91,12 +91,16 @@ def split_commands(command: str) -> list[str]:
     - Process substitution (<(...) or >(...))
     - Backtick substitution (backtick...backtick)
     - Backslash-escaped characters
+    - Parameter expansion (${...})
+    - Bare subshells ((...))
+    - Brace groups ({ ...; })
+    - Conditional expressions ([[ ... ]])
+    - Extglob patterns (?(...), *(...), +(...), @(...), !(...))
+    - Arithmetic expressions ((( ... )))
 
     Critical fixes incorporated:
     - C-2: Backslash escapes and backtick substitution handling
     - M-4: Single & as command separator
-
-    Known limitation: ANSI-C quoting ($'...') is not specially handled.
 
     Args:
         command: The compound bash command to split.
@@ -113,6 +117,10 @@ def split_commands(command: str) -> list[str]:
     i = 0
     pending_heredocs: list[tuple[str, bool]] = []  # (delimiter, strip_tabs)
     arithmetic_depth = 0  # tracks (( ... )) nesting for arithmetic context
+    param_expansion_depth = 0  # tracks ${ ... } nesting
+    bracket_depth = 0  # tracks [[ ... ]] nesting
+    brace_group_depth = 0  # tracks { ...; } brace groups
+    extglob_depth = 0  # tracks extglob ?() *() +() @() !() nesting
 
     while i < len(command):
         c = command[i]
@@ -178,7 +186,156 @@ def split_commands(command: str) -> list[str]:
             i += 1
             continue
 
-        # Only split at top level (depth == 0)
+        # --- Context tracking (BEFORE separator checks) ---
+        # All context entry/exit must happen before separators so that
+        # delimiters inside these constructs are suppressed correctly.
+
+        # Track ${...} parameter expansion
+        if c == "$" and i + 1 < len(command) and command[i + 1] == "{":
+            param_expansion_depth += 1
+            current.append("${")
+            i += 2
+            continue
+
+        # Track } for parameter expansion (only when inside ${} and not
+        # inside a nested command substitution where } is literal)
+        if c == "}" and param_expansion_depth > 0 and depth == 0:
+            param_expansion_depth -= 1
+            current.append(c)
+            i += 1
+            continue
+
+        # Skip everything inside ${...} (but still track nested ${} and $())
+        if param_expansion_depth > 0 and depth == 0:
+            # Track nested ${ inside parameter expansion
+            if c == "$" and i + 1 < len(command) and command[i + 1] == "{":
+                param_expansion_depth += 1
+                current.append("${")
+                i += 2
+                continue
+            current.append(c)
+            i += 1
+            continue
+
+        # Track [[ ... ]] conditional expressions
+        if (command[i:i+2] == "[["
+                and (i == 0 or command[i-1] in " \t\n;|&(")
+                and i + 2 < len(command) and command[i+2] in " \t"):
+            bracket_depth += 1
+            current.append("[[")
+            i += 2
+            continue
+
+        # V2-fix: depth == 0 guard prevents ]] inside $() from decrementing
+        if (command[i:i+2] == "]]" and bracket_depth > 0 and depth == 0):
+            bracket_depth -= 1
+            current.append("]]")
+            i += 2
+            continue
+
+        # Skip separators inside [[ ... ]]
+        if bracket_depth > 0:
+            current.append(c)
+            i += 1
+            continue
+
+        # Track arithmetic context: (( ... ))
+        # Must come BEFORE bare-paren and separator checks.
+        # Note: $(( is already handled by the $() depth tracking.
+        if (command[i:i+2] == '(('
+                and (i == 0 or command[i-1] not in ('$', '<', '>'))):
+            arithmetic_depth += 1
+            current.append('((')
+            i += 2
+            continue
+
+        if command[i:i+2] == '))' and arithmetic_depth > 0:
+            arithmetic_depth -= 1
+            current.append('))')
+            i += 2
+            continue
+
+        # Skip separators inside (( ... ))
+        if arithmetic_depth > 0:
+            current.append(c)
+            i += 1
+            continue
+
+        # Track extglob patterns: ?() *() +() @() !()
+        if (c in "?*+@!" and i + 1 < len(command) and command[i + 1] == "("
+                and depth == 0):
+            extglob_depth += 1
+            current.append(c)
+            current.append("(")
+            i += 2
+            continue
+
+        if c == ")" and extglob_depth > 0:
+            extglob_depth -= 1
+            current.append(c)
+            i += 1
+            continue
+
+        # Skip separators inside extglob
+        if extglob_depth > 0:
+            # Track nested extglob
+            if (c in "?*+@!" and i + 1 < len(command)
+                    and command[i + 1] == "("):
+                extglob_depth += 1
+                current.append(c)
+                current.append("(")
+                i += 2
+                continue
+            current.append(c)
+            i += 1
+            continue
+
+        # Track bare (...) subshells (not $(), <(), >(), or (())
+        if c == "(" and depth == 0:
+            # Not preceded by $, <, > (those are handled above)
+            if i == 0 or command[i - 1] not in ("$", "<", ">"):
+                depth += 1
+                current.append(c)
+                i += 1
+                continue
+
+        # Track { ... } brace groups
+        # { is a reserved word only when it's a standalone token:
+        # preceded by whitespace/SOL and followed by whitespace
+        if (c == "{" and brace_group_depth == 0
+                and (i == 0 or command[i-1] in " \t\n;|&(")
+                and i + 1 < len(command) and command[i+1] in " \t\n"):
+            # Make sure this is not ${ (already handled above)
+            if i == 0 or command[i-1] != "$":
+                brace_group_depth += 1
+                current.append(c)
+                i += 1
+                continue
+
+        # Track nested { inside brace groups
+        if (c == "{" and brace_group_depth > 0
+                and (command[i-1] in " \t\n;|&(" if i > 0 else True)
+                and i + 1 < len(command) and command[i+1] in " \t\n"):
+            brace_group_depth += 1
+            current.append(c)
+            i += 1
+            continue
+
+        # } closes brace group when it's a standalone token
+        # V2-fix: depth == 0 guard prevents } inside $() from decrementing
+        if (c == "}" and brace_group_depth > 0 and depth == 0):
+            brace_group_depth -= 1
+            current.append(c)
+            i += 1
+            continue
+
+        # Skip separators inside brace groups
+        if brace_group_depth > 0:
+            current.append(c)
+            i += 1
+            continue
+
+        # --- Separator checks (only at top level, depth == 0) ---
         if depth == 0:
             # Semicolon
             if c == ";":
@@ -228,21 +385,14 @@ def split_commands(command: str) -> list[str]:
                 current = []
                 i += 1
                 continue
-            # Track arithmetic context: (( ... ))
-            # This prevents << inside (( )) from being misdetected as heredoc.
-            # Note: $(( is already handled by the existing depth tracking
-            # (the $( part increments depth), so we only need to catch bare ((.
-            if (command[i:i+2] == '(('
-                    and (i == 0 or command[i-1] not in ('$', '<', '>'))):
-                arithmetic_depth += 1
-                current.append('((')
-                i += 2
-                continue
-
-            if command[i:i+2] == '))' and arithmetic_depth > 0:
-                arithmetic_depth -= 1
-                current.append('))')
-                i += 2
+            # Comment tracking: # starts a comment to end-of-line in bash.
+            # Consume the rest of the line to prevent << inside comments
+            # from being misdetected as heredoc (security: fail-closed).
+            # Only triggers when # follows whitespace/separator (bash semantics).
+            if c == '#' and (i == 0 or command[i-1] in ' \t\n;|&()'):
+                while i < len(command) and command[i] != '\n':
+                    current.append(command[i])
+                    i += 1
                 continue
 
             # Detect heredoc operator: << or <<- (but NOT <<< here-string)
@@ -414,6 +564,116 @@ def glob_to_literals(pattern: str) -> list[str]:
     return []
 
 
+def _decode_ansi_c_strings(command: str) -> str:
+    """Decode ANSI-C quoted strings ($'...') in a command.
+
+    Bash ANSI-C quoting allows hex (\\xHH), octal (\\0NNN or \\NNN),
+    and standard escapes (\\n, \\t, etc.) inside $'...' sequences.
+    Attackers can use this to hide protected filenames from literal scans.
+
+    Args:
+        command: Raw command string.
+
+    Returns:
+        Command with $'...' sequences replaced by their decoded content.
+    """
+    def _decode_escape(m: re.Match) -> str:
+        content = m.group(1)
+        result: list[str] = []
+        i = 0
+        while i < len(content):
+            if content[i] == '\\' and i + 1 < len(content):
+                nc = content[i + 1]
+                if nc == 'x' and i + 3 < len(content):
+                    hex_str = content[i + 2:i + 4]
+                    try:
+                        val = int(hex_str, 16)
+                        # V2-fix: \x00 (null byte) terminates C strings in bash;
+                        # replace with space (boundary char) for scan matching
+                        result.append(' ' if val == 0 else chr(val))
+                        i += 4
+                        continue
+                    except ValueError:
+                        pass
+                elif nc == 'u' and i + 5 < len(content):
+                    # \uHHHH — 16-bit Unicode
+                    hex_str = content[i + 2:i + 6]
+                    if len(hex_str) == 4:
+                        try:
+                            result.append(chr(int(hex_str, 16)))
+                            i += 6
+                            continue
+                        except ValueError:
+                            pass
+                elif nc == 'U' and i + 9 < len(content):
+                    # \UHHHHHHHH — 32-bit Unicode
+                    hex_str = content[i + 2:i + 10]
+                    if len(hex_str) == 8:
+                        try:
+                            cp = int(hex_str, 16)
+                            if cp <= 0x10FFFF:
+                                result.append(chr(cp))
+                                i += 10
+                                continue
+                        except ValueError:
+                            pass
+                elif nc in '01234567':
+                    # Octal: \NNN (1-3 octal digits, with or without leading 0)
+                    j = i + 1
+                    oct_str = ''
+                    while j < len(content) and content[j] in '01234567' and len(oct_str) < 3:
+                        oct_str += content[j]
+                        j += 1
+                    if oct_str:
+                        try:
+                            result.append(chr(int(oct_str, 8)))
+                            i = j
+                            continue
+                        except ValueError:
+                            pass
+                elif nc == 'c':
+                    # V2-fix: \c terminates ANSI-C string (bash discards rest)
+                    break
+                elif nc in ('n', 't', 'r', 'a', 'b', 'f', 'v', 'e', 'E', '\\', "'"):
+                    escape_map = {
+                        'n': '\n', 't': '\t', 'r': '\r', 'a': '\a',
+                        'b': '\b', 'f': '\f', 'v': '\v', 'e': '\x1b',
+                        'E': '\x1b',  # V2-fix: uppercase \E is ESC, same as \e
+                        '\\': '\\', "'": "'",
+                    }
+                    result.append(escape_map[nc])
+                    i += 2
+                    continue
+                result.append(content[i])
+                i += 1
+            else:
+                result.append(content[i])
+                i += 1
+        return ''.join(result)
+
+    return re.sub(r"""\$'((?:[^'\\]|\\.)*)'""", _decode_escape, command)
+
+
+def _expand_glob_chars(command: str) -> str:
+    """Expand single-character glob bracket classes in command text.
+
+    Converts evasion patterns so literal scanning can catch them:
+    - [x] (single char in brackets) -> x
+    - [\\x] (escaped char in brackets) -> x
+
+    Only expands single-character classes to avoid false positives
+    from multi-char classes like [abc] or ranges like [a-z].
+
+    Args:
+        command: Raw command string.
+
+    Returns:
+        Command with single-char bracket classes expanded.
+    """
+    # Match [x] or [\x] (single char, optionally backslash-escaped)
+    return re.sub(r'\[\\?([^\]\[\\])\]', r'\1', command)
+
+
 def scan_protected_paths(command: str, config: dict) -> tuple[str, str]:
     """Scan raw command string for protected path references (Layer 1).
 
@@ -427,6 +687,11 @@ def scan_protected_paths(command: str, config: dict) -> tuple[str, str]:
     Uses word-boundary regex to reduce false matches.
 
     I-4 fix: Includes / in word-boundary regex so ./.env is caught.
+
+    Also scans a normalized copy of the command where:
+    - ANSI-C quoted strings ($'\\x2e\\x65\\x6e\\x76') are decoded
+    - Single-char glob classes ([v]) are expanded
+    This catches evasion attempts that hide protected paths via encoding.
 
     Args:
         command: The raw bash command string.
@@ -458,6 +723,18 @@ def scan_protected_paths(command: str, config: dict) -> tuple[str, str]:
         config_key = tier_to_config_key.get(tier)
         if config_key:
             all_scan_paths.extend(config.get(config_key, []))
+
+    # Build normalized variants of the command to catch evasion attempts.
+    normalized = _decode_ansi_c_strings(command)
+    normalized = _expand_glob_chars(normalized)
+    expanded_orig = _expand_glob_chars(command)
+
+    # Collect all text variants to scan (deduplicated)
+    scan_texts = [command]
+    if expanded_orig != command:
+        scan_texts.append(expanded_orig)
+    if normalized not in scan_texts:
+        scan_texts.append(normalized)
 
     strongest_verdict = "allow"
     strongest_reason = ""
@@ -492,7 +769,39 @@ def scan_protected_paths(command: str, config: dict) -> tuple[str, str]:
                 # Exact match: strict boundaries both sides
                 regex = boundary_before + re.escape(literal) + boundary_after
 
-            if re.search(regex, command):
+            # Build a glob-?-aware regex: for each char in the literal,
+            # also allow ? as a substitute (catches .en? -> .env evasion).
+            # Uses a capturing group per position to verify post-match that
+            # at least one position matched a concrete character (not all ?).
+            glob_q_parts = []
+            for ch in literal:
+                glob_q_parts.append(f'({re.escape(ch)}|\\?)')
+            glob_q_literal = ''.join(glob_q_parts)
+            if is_suffix_pattern:
+                glob_q_regex = glob_q_literal + boundary_after
+            elif is_prefix_pattern:
+                glob_q_regex = boundary_before + glob_q_literal
+            else:
+                glob_q_regex = boundary_before + glob_q_literal + boundary_after
+
+            # Check all text variants (original + normalized)
+            found = False
+            for scan_text in scan_texts:
+                if re.search(regex, scan_text):
+                    found = True
+                    break
+                # Only try glob-? regex if command contains ? chars
+                # V2-fix: Use finditer (not search) to check ALL matches,
+                # so a leading ???? doesn't shadow a later .en? match
+                if '?' in scan_text:
+                    for gm in re.finditer(glob_q_regex, scan_text):
+                        # Require at least one non-? character match
+                        # to prevent all-? tokens like ???? from matching
+                        if any(g != '?' for g in gm.groups() if g):
+                            found = True
+                            break
+
+            if found:
                 action = exact_action if is_exact else pattern_action
                 reason = f"Protected path reference detected: {literal}"
 
@@ -720,14 +1029,15 @@ def is_delete_command(command: str) -> bool:
     """
     delete_patterns = [
         # Shell delete commands
-        r"(?:^|[;&|]\s*)rm\s+",
-        r"(?:^|[;&|]\s*)del\s+",
-        r"(?:^|[;&|]\s*)rmdir\s+",
-        r"(?:^|[;&|]\s*)Remove-Item\s+",
-        r"(?:^|[;&|]\s*)ri\s+",
+        # V1-fix: Added ({ to alternation so commands inside { } and ( ) are detected
+        r"(?:^|[;&|({]\s*)rm\s+",
+        r"(?:^|[;&|({]\s*)del\s+",
+        r"(?:^|[;&|({]\s*)rmdir\s+",
+        r"(?:^|[;&|({]\s*)Remove-Item\s+",
+        r"(?:^|[;&|({]\s*)ri\s+",
         # P1-1: git rm (deletes files from working tree and index)
         # F8: Allow optional git global flags before subcommand (e.g., git -C dir rm)
-        r"(?:^|[;&|]\s*)git\s+(?:-[A-Za-z]\s+\S+\s+|--[a-z][-a-z]*(?:=\S+|\s+(?!rm\b)\S+)?\s+)*rm\s+",
+        r"(?:^|[;&|({]\s*)git\s+(?:-[A-Za-z]\s+\S+\s+|--[a-z][-a-z]*(?:=\S+|\s+(?!rm\b)\S+)?\s+)*rm\s+",
         # mv to /dev/null (effective deletion)
         r"\bmv\s+\S+\s+/dev/null\b",
         # P1-2: Standalone redirect truncation (> file, : > file, >| file)
@@ -1127,7 +1437,11 @@ def main() -> None:
     # Scan joined sub-commands instead of raw command string.
     # After heredoc-aware split_commands(), heredoc body content is excluded,
     # so .env/.pem in heredoc bodies no longer trigger false positives.
-    scan_text = ' '.join(sub_commands)
+    # Also filter out comment-only sub-commands to prevent false positives
+    # from e.g. "# .env" appearing in scan text.
+    scan_text = ' '.join(
+        sub for sub in sub_commands if not sub.lstrip().startswith('#')
+    )
     scan_verdict, scan_reason = scan_protected_paths(scan_text, config)
     if scan_verdict != "allow":
         final_verdict = _stronger_verdict(final_verdict, (scan_verdict, scan_reason))

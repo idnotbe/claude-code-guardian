@@ -206,9 +206,9 @@ class TestP1_4_MetadataBypass(unittest.TestCase):
         """FINDING: install command not detected (I-2 tradeoff for npm/pip)."""
         self.assertFalse(is_write_command("install -m 755 src dest"))
 
-    def test_ln_symlink_not_detected(self):
-        """FINDING: ln -s not detected as write. Symlink escape handled separately."""
-        self.assertFalse(is_write_command("ln -s /etc/passwd link"))
+    def test_ln_symlink_detected(self):
+        """ln -s is now detected as write via (?<![A-Za-z-])ln\\s+ pattern."""
+        self.assertTrue(is_write_command("ln -s /etc/passwd link"))
 
     def test_chmod_with_equals(self):
         """chmod u=rwx file -- alternate syntax still caught."""
@@ -492,9 +492,9 @@ class TestKnownGaps(unittest.TestCase):
         """GAP: setfacl not detected as write. Severity: LOW."""
         self.assertFalse(is_write_command("setfacl -m u:user:rw file"))
 
-    def test_ln_symlink_gap(self):
-        """GAP: ln -s not detected as write. Symlink escape handled separately."""
-        self.assertFalse(is_write_command("ln -s /etc/passwd link"))
+    def test_ln_symlink_detected(self):
+        """ln -s is now detected as write via (?<![A-Za-z-])ln\\s+ pattern."""
+        self.assertTrue(is_write_command("ln -s /etc/passwd link"))
 
     def test_install_command_gap(self):
         """GAP: install -m 755 not detected (I-2 tradeoff). Severity: MEDIUM."""
