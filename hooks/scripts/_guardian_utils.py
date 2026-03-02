@@ -359,6 +359,8 @@ def clear_circuit() -> None:
 # Only the user's config file needs guarding from agent modification.
 SELF_GUARDIAN_PATHS = (
     ".claude/guardian/config.json",
+    ".claude/settings.json",
+    ".claude/settings.local.json",
 )
 """Paths that are always guarded from Edit/Write, even if not in config.
 This is a security measure to prevent guardian bypass.
@@ -870,6 +872,140 @@ def match_block_patterns(command: str) -> tuple[bool, str]:
         match = safe_regex_search(pattern, command, re.IGNORECASE | re.DOTALL)
         if match:
             return True, reason
+
+    return False, ""
+
+
+# Interpreter commands that take inline code via -c or -e.
+# Uses search() not match() to handle:
+#   - env prefixed: "env python3 -c ..."
+#   - absolute path: "/usr/bin/python3 -c ..."
+#   - variable prefix: "LANG=C python3 -c ..."
+#   - command builtin: "command python3 -c ..."
+_INTERPRETER_PREFIXES = re.compile(
+    r'(?:^|[\s;|&])(?:/[\w./]*)?(?:py|python[23]?|python\d[\d.]*|node|deno|bun|perl|ruby)\s+'
+)
+
+# Destructive API patterns to check within extracted payloads.
+# Used by check_interpreter_payload() which is integrated into is_delete_command()
+# (Layer 3/4). Only DELETE-class operations belong here — write/permission ops
+# (os.chmod, open('w')) are covered by Phase 2b ask patterns instead.
+_DESTRUCTIVE_APIS = [
+    # Python
+    r'os\.(?:remove|unlink|rmdir)',
+    r'shutil\.(?:rmtree|move)',
+    r'pathlib\.Path\([^)]*\)\.unlink',
+    r'\bPath\([^)]*\)\.unlink',
+    # Node
+    r'(?:unlinkSync|rmSync|rmdirSync|fs\.unlink|fs\.rm\b|promises\.unlink)',
+    # Perl/Ruby — (?<!\.) prevents matching Python .unlink() method calls
+    r'(?<!\.)\bunlink\b',
+    r'File\.delete',
+    r'FileUtils\.rm',
+]
+
+_DESTRUCTIVE_API_PATTERN = re.compile(
+    '|'.join(_DESTRUCTIVE_APIS),
+    re.IGNORECASE
+)
+
+
+def extract_interpreter_payload(command: str) -> str | None:
+    """Extract inline code payload from interpreter -c/-e arguments.
+
+    Handles:
+    - python3 -c "code"
+    - python3 -c 'code'
+    - perl -e "code"
+    - node -e "code"
+    - Multiline payloads (newlines within quotes)
+
+    Args:
+        command: The bash command string.
+
+    Returns:
+        The extracted payload string, or None if not an interpreter -c/-e command.
+    """
+    # Find interpreter prefix — search() instead of match() to handle
+    # env-var prefixed commands like "LANG=C python3 -c ..."
+    stripped = command.lstrip()
+    match = _INTERPRETER_PREFIXES.search(stripped)
+    if not match:
+        return None
+
+    rest = stripped[match.end():]
+
+    # Find -c or -e flag anywhere after interpreter name, skipping other flags.
+    # V2 RF-05: python3 -W ignore -c "..." and python3 -B -c "..." were missed.
+    # Using search() instead of match() handles flags with arguments (-W ignore)
+    # AND flags without arguments (-B, -u, -O) without needing to enumerate them.
+    flag_match = re.search(r'(?:^|\s)(-[ce])\s+', rest)
+    if not flag_match:
+        return None
+
+    payload_start = rest[flag_match.end():]
+
+    # Extract quoted payload
+    if payload_start.startswith('"'):
+        # Double-quoted: find matching unescaped close quote
+        end = _find_closing_quote(payload_start, '"')
+        if end > 0:
+            return payload_start[1:end]
+    elif payload_start.startswith("'"):
+        # Single-quoted: find matching close quote (no escaping in single quotes)
+        end = payload_start.index("'", 1) if "'" in payload_start[1:] else -1
+        if end > 0:
+            return payload_start[1:end]
+    else:
+        # Unquoted: take everything up to next shell metachar
+        unquoted = re.match(r'[^\s;|&<>]+', payload_start)
+        if unquoted:
+            return unquoted.group()
+
+    return None
+
+
+def _find_closing_quote(s: str, quote_char: str) -> int:
+    """Find the index of the closing quote, handling backslash escapes.
+
+    Args:
+        s: String starting with the opening quote.
+        quote_char: The quote character (" or ').
+
+    Returns:
+        Index of the closing quote, or -1 if not found.
+    """
+    i = 1  # Skip opening quote
+    while i < len(s):
+        if s[i] == '\\' and i + 1 < len(s):
+            i += 2  # Skip escaped character
+        elif s[i] == quote_char:
+            return i
+        else:
+            i += 1
+    return -1
+
+
+def check_interpreter_payload(command: str) -> tuple[bool, str]:
+    """Check if an interpreter command contains destructive API calls.
+
+    This addresses the root cause of the bypass incident where
+    `python3 -c "import os; [os.unlink(f) ...]"` bypassed the block
+    pattern due to multiline handling issues with [^|&\\n]*.
+
+    Args:
+        command: The bash command string.
+
+    Returns:
+        (is_destructive, reason) tuple.
+    """
+    payload = extract_interpreter_payload(command)
+    if payload is None:
+        return False, ""
+
+    match = _DESTRUCTIVE_API_PATTERN.search(payload)
+    if match:
+        return True, f"Interpreter payload contains destructive API: {match.group()}"
 
     return False, ""
 
@@ -2190,6 +2326,9 @@ def is_self_guardian_path(path: str) -> bool:
     if sys.platform != "linux":
         project_normalized = project_normalized.lower()
 
+    # Collect full paths for inode comparison later
+    full_protected_paths = []
+
     # Check static self-guardian paths
     for protected in SELF_GUARDIAN_PATHS:
         protected_norm = protected.replace("\\", "/")
@@ -2202,6 +2341,7 @@ def is_self_guardian_path(path: str) -> bool:
         full_protected = f"{project_normalized}/{protected_norm}"
         if norm_path == full_protected:
             return True
+        full_protected_paths.append(full_protected)
 
     # PLUGIN MIGRATION: Also check dynamic config path (the actually-loaded config)
     active_config = get_active_config_path()
@@ -2213,6 +2353,33 @@ def is_self_guardian_path(path: str) -> bool:
             return True  # Fail-closed
         if norm_path == active_norm:
             return True
+        full_protected_paths.append(active_norm)
+
+    # HARDLINK DETECTION: Check if the target path shares an inode with
+    # any protected path. Path.resolve() does NOT resolve hardlinks,
+    # so an attacker could create a hardlink alias to bypass path checks.
+    # This closes AC-02 (hardlink alias bypass).
+    try:
+        target_path = Path(path)
+        if target_path.exists():
+            target_stat = target_path.stat()
+            target_inode = target_stat.st_ino
+            target_dev = target_stat.st_dev
+            for protected_path_str in full_protected_paths:
+                protected_path = Path(protected_path_str)
+                if protected_path.exists():
+                    protected_stat = protected_path.stat()
+                    if (target_inode == protected_stat.st_ino
+                            and target_dev == protected_stat.st_dev):
+                        log_guardian(
+                            "BLOCK",
+                            f"Hardlink alias detected: {path} -> "
+                            f"{protected_path_str} (same inode {target_inode})"
+                        )
+                        return True
+    except (OSError, PermissionError):
+        # Non-critical: If we can't stat, the path check above already covered it
+        pass
 
     return False
 

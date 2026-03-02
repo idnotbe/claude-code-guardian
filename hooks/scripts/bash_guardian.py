@@ -1050,7 +1050,15 @@ def is_delete_command(command: str) -> bool:
         r"(?:node|deno|bun)\s[^|&\n]*(?:unlinkSync|rmSync|rmdirSync|fs\.unlink|fs\.rm\b|promises\.unlink)",
         r"(?:perl|ruby)\s[^|&\n]*(?:\bunlink\b|File\.delete|FileUtils\.rm)",
     ]
-    return any(re.search(p, command, re.IGNORECASE) for p in delete_patterns)
+    if any(re.search(p, command, re.IGNORECASE) for p in delete_patterns):
+        return True
+
+    # NEW: Fallback — extract interpreter payload and check for destructive APIs
+    # This catches multiline -c/-e payloads in sub-commands (compound commands)
+    # where the regex patterns fail due to [^|&\n]* stopping at newlines.
+    from _guardian_utils import check_interpreter_payload
+    is_destructive, _ = check_interpreter_payload(command)
+    return is_destructive
 
 
 def is_write_command(command: str) -> bool:

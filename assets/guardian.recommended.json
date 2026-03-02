@@ -245,6 +245,46 @@
       {
         "pattern": "\\b(?:LD_PRELOAD|DYLD_INSERT_LIBRARIES)\\+?\\s*=",
         "reason": "Blocks LD_PRELOAD/DYLD_INSERT_LIBRARIES -- library injection that can intercept any system call"
+      },
+      {
+        "pattern": "(?:bash|sh|zsh|dash)\\s+-c\\s+(?:\\$?['\"])?[^'\"]*(?:rm|del|rmdir|shred|unlink)\\b[^'\"]*\\.claude",
+        "reason": "Shell wrapper deletion targeting .claude (BV-03)"
+      },
+      {
+        "pattern": "(?i)eval\\s+(?:\\$?['\"])?[^'\"]*(?:rm|del|rmdir|shred|unlink)\\b[^'\"]*\\.claude",
+        "reason": "Eval wrapper deletion targeting .claude (BV-06)"
+      },
+      {
+        "pattern": "(?:perl|ruby)\\s[^|&\\n]*(?:truncate\\b|File\\.truncate)",
+        "reason": "Perl/Ruby file truncation (BV-12)"
+      },
+      {
+        "pattern": "(?:setfacl|setfattr)\\s+.*\\.claude",
+        "reason": "ACL/xattr modification targeting .claude (BV-13)"
+      },
+      {
+        "pattern": "\\binstall\\s+(?:-m\\s+\\d+|--mode[=\\s]\\d+).*\\.claude",
+        "reason": "install command with mode targeting .claude (BV-14)"
+      },
+      {
+        "pattern": "\\bln\\s+(?!-s).*\\.claude(?:/|\\s|[;&|]|$)",
+        "reason": "Hardlink creation targeting .claude (AC-02)"
+      },
+      {
+        "pattern": "\\bln\\s+\\.claude(?:/|\\s|[;&|]|$)",
+        "reason": "Hardlink FROM .claude path (AC-02)"
+      },
+      {
+        "pattern": "(?:kill|pkill|killall)\\s+.*guard",
+        "reason": "Process kill targeting guardian processes (AC-03)"
+      },
+      {
+        "pattern": "(?:chmod|chattr)\\s+.*\\.claude(?:/|$)",
+        "reason": "Permission change on any .claude path (NF-01)"
+      },
+      {
+        "pattern": "(?:py|python[23]?|python\\d[\\d.]*)\\s[^|&\\n]*os\\.chmod\\([^)]*\\.claude",
+        "reason": "Python chmod targeting .claude (NF-01)"
       }
     ],
     "ask": [
