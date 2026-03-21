@@ -71,13 +71,18 @@ class TestHeredocDelimiterEdgeCases(unittest.TestCase):
         self.assertEqual(len(result), 1)
 
     def test_backslash_escaped_delimiter(self):
-        r"""Backslash-escaped delimiter: cat << \\EOF.
+        r"""Backslash-escaped delimiter: cat << \EOF.
 
-        The backslash handler consumes \\ + next char as an escaped pair
-        before reaching heredoc detection. Body termination requires a
-        matching \\EOF line.
+        Phase 0 fix: Bash strips backslash escapes from bare-word delimiters.
+        cat << \EOF uses EOF as the delimiter (\E -> E, OF -> OF).
+        Body terminator must be EOF, not \EOF.
         """
+        # Old body terminator \EOF no longer matches delim=EOF -> unterminated
         result = split_commands('cat << \\EOF\nhidden\n\\EOF\necho visible')
+        self.assertEqual(len(result), 1)  # fail-closed: unterminated heredoc
+
+        # Correct usage: use EOF as body terminator (matches bash behavior)
+        result = split_commands('cat << \\EOF\nhidden\nEOF\necho visible')
         self.assertEqual(len(result), 2)
         self.assertIn("echo visible", result[1])
 
@@ -114,12 +119,17 @@ class TestHeredocDelimiterEdgeCases(unittest.TestCase):
         self.assertIn("echo visible", result[-1])
 
     def test_backslash_space_delimiter(self):
-        r"""Backslash-space delimiter: cat << \\ (single backslash as delimiter).
+        r"""Backslash-space delimiter: cat << \\ (double backslash).
 
-        The backslash handler consumes \\ as escape sequence. Body terminates
-        when a line contains just \\.
+        Phase 0 fix: \\ in bare-word context -> \ (one literal backslash).
+        Delimiter = \ (single backslash). Body terminator must be a single \.
         """
+        # Body has \\ (two backslashes) which doesn't match \ -> unterminated
         result = split_commands('cat << \\\\ \nhidden\n\\\\\necho visible')
+        self.assertEqual(len(result), 1)  # fail-closed: unterminated heredoc
+
+        # Correct usage: single \ as body terminator
+        result = split_commands('cat << \\\\ \nhidden\n\\\necho visible')
         self.assertEqual(len(result), 2)
         self.assertIn("echo visible", result[1])
 

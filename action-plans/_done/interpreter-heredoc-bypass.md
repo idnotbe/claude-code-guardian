@@ -1,6 +1,6 @@
 ---
-status: not-started
-progress: "Plan written, not yet implemented"
+status: done
+progress: "Incorporated as Phase 3 of heredoc-scanning-redesign.md and fully implemented. See _done/heredoc-scanning-redesign.md."
 ---
 
 # Interpreter-Heredoc Body Injection Bypass

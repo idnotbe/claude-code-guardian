@@ -1,0 +1,281 @@
+diff --git a/hooks/scripts/bash_guardian.py b/hooks/scripts/bash_guardian.py
+index 705c5cc..ca74fd2 100644
+--- a/hooks/scripts/bash_guardian.py
++++ b/hooks/scripts/bash_guardian.py
+@@ -75,11 +75,146 @@ except ImportError as e:
+ 
+ 
+ # ============================================================
+-# Layer 2: Command Decomposition
++# Layer 2: Command Decomposition + Heredoc Redaction
+ # ============================================================
+ 
++# Passive data sinks: commands that process data, never execute it.
++# Heredoc bodies feeding these commands are safe to redact.
++# V1 fix (F1-2): tee REMOVED — writes to files without > operator.
++# sort excluded — has -o output flag.
++_PASSIVE_DATA_SINKS = frozenset({
++    'cat',
++    'grep', 'egrep', 'fgrep', 'head', 'tail', 'wc', 'uniq',
++    'cut', 'tr', 'fold', 'fmt', 'column', 'paste', 'join', 'comm',
++    'echo', 'printf',
++    'jq', 'yq',
++    'diff', 'cmp', 'md5sum', 'sha256sum', 'sha1sum',
++})
++
++# Interpreter commands: ALWAYS unsafe for heredoc redaction.
++_INTERPRETER_COMMANDS = frozenset({
++    'bash', 'sh', 'zsh', 'dash', 'ksh', 'csh', 'tcsh', 'fish',
++    'python', 'python2', 'python3', 'py',
++    'node', 'deno', 'bun',
++    'perl', 'ruby',
++    'source', 'eval', 'exec',
++})
++
++# Output redirection operators that make a heredoc UNSAFE (body written to file).
++# V1 fix (F1-3): >&file added with negative lookahead for fd duplication (>&2).
++_OUTPUT_REDIR_PATTERN = re.compile(
++    r'(?:'
++    r'[0-9]*>{1,2}'        # >, >>, 2>, 2>>, n>, n>>
++    r'|[0-9]*>\|'          # >| (clobber), n>|
++    r'|&>'                  # &> (redirect both stdout+stderr)
++    r'|[0-9]*>&(?!\s*(?:[0-9]+|-)(?:[\s;&|)]|$))'  # >&file (not >&2 fd dup)
++    r')'
++    r'\s*[^\s&|;)>]'       # followed by a target (not another operator)
++)
++
++
++def _extract_base_command(cmd_text: str) -> str:
++    """Extract the base command name from a command string.
++
++    Handles env prefixes, variable assignments, sudo, absolute paths,
++    and I/O redirect tokens before the command.
++
++    V2 fix: skips I/O redirect tokens (< file, > file) before the command.
+ 
+-def split_commands(command: str) -> list[str]:
++    Args:
++        cmd_text: Command text (may include flags, args, etc.)
++
++    Returns:
++        Base command name (lowercase), or empty string if unparseable.
++    """
++    cmd_text = cmd_text.strip()
++    if not cmd_text:
++        return ''
++
++    try:
++        parts = shlex.split(cmd_text)
++    except ValueError:
++        return ''
++
++    skip_prefixes = {'env', 'command', 'builtin', 'sudo', 'nice',
++                     'nohup', 'time', 'strace'}
++    i = 0
++    while i < len(parts):
++        part = parts[i]
++
++        # Skip I/O redirect tokens: <, >, >>, <<, and their targets
++        if part in ('<', '>', '>>', '<<', '>&', '&>', '>|'):
++            i += 2  # skip operator + target
++            continue
++        # Handle combined redirect+target (e.g., <file, >file)
++        if len(part) >= 2 and part[0] in '<>' and part[1] not in '<>':
++            i += 1
++            continue
++
++        # Variable assignment: contains = before any /
++        if '=' in part and '/' not in part.split('=')[0]:
++            i += 1
++            continue
++
++        # Known prefix commands (skip, move to next)
++        base = Path(part).name if '/' in part else part
++        if base.lower() in skip_prefixes:
++            i += 1
++            if base.lower() == 'sudo':
++                while i < len(parts) and parts[i].startswith('-'):
++                    i += 1
++                    if i < len(parts) and not parts[i].startswith('-'):
++                        i += 1
++            continue
++
++        # This is the actual command
++        base = Path(part).name if '/' in part else part
++        return base.lower()
++
++    return ''
++
++
++def _classify_heredoc_safety(cmd_before_heredoc: str, was_piped: bool) -> bool:
++    """Classify whether a heredoc body is safe to redact.
++
++    Uses a 5-rule hybrid classifier:
++      1. Interpreter command -> UNSAFE (retain body)
++      2. Output redirection present -> UNSAFE (retain body)
++      3. Pipeline member (heredoc crossed a pipe) -> UNSAFE (retain body)
++      4. Passive data sink -> SAFE (redact body)
++      5. Unknown command -> UNSAFE (fail-closed, retain body)
++
++    Args:
++        cmd_before_heredoc: The command text preceding the << operator.
++        was_piped: Whether the heredoc crossed a pipe boundary.
++
++    Returns:
++        True if the heredoc body is safe to redact, False otherwise.
++    """
++    # Rule 3: Pipeline membership (checked first because it's a flag, not text)
++    if was_piped:
++        return False
++
++    base_cmd = _extract_base_command(cmd_before_heredoc)
++
++    # Rule 1: Interpreter commands are always unsafe
++    if base_cmd in _INTERPRETER_COMMANDS:
++        return False
++
++    # Rule 2: Output redirection makes the heredoc unsafe
++    if _OUTPUT_REDIR_PATTERN.search(cmd_before_heredoc):
++        return False
++
++    # Rule 4: Passive data sinks are safe
++    if base_cmd in _PASSIVE_DATA_SINKS:
++        return True
++
++    # Rule 5: Unknown commands fail-closed
++    return False
++
++
++def split_commands(command: str, redact_safe_heredocs: bool = False
++                   ) -> 'list[str] | tuple[list[str], str]':
+     """Split compound command into sub-commands.
+ 
+     Handles delimiters: ;  &&  ||  |  &  newline
+@@ -98,15 +233,24 @@ def split_commands(command: str) -> list[str]:
+     - Extglob patterns (?(...), *(...), +(...), @(...), !(...))
+     - Arithmetic expressions ((( ... )))
+ 
++    When redact_safe_heredocs=True, also produces a redacted version of
++    the command with safe heredoc bodies replaced by empty lines. Safe
++    means the heredoc feeds a passive data sink (cat, grep, etc.) with
++    no output redirection and no pipeline. Unsafe bodies (interpreters,
++    write-to-file, piped, unknown) are retained.
++
+     Critical fixes incorporated:
+     - C-2: Backslash escapes and backtick substitution handling
+     - M-4: Single & as command separator
++    - F1-1: Heredoc origin tracking at << parse time
+ 
+     Args:
+         command: The compound bash command to split.
++        redact_safe_heredocs: If True, return (sub_commands, redacted_command).
+ 
+     Returns:
+-        List of individual sub-commands (stripped of whitespace).
++        If redact_safe_heredocs is False: list of sub-command strings.
++        If redact_safe_heredocs is True: tuple of (sub_commands, redacted_command).
+     """
+     sub_commands: list[str] = []
+     current: list[str] = []
+@@ -115,12 +259,17 @@ def split_commands(command: str) -> list[str]:
+     in_double_quote = False
+     in_backtick = False
+     i = 0
+-    pending_heredocs: list[tuple[str, bool]] = []  # (delimiter, strip_tabs)
++    # F1-1 fix: Store (delimiter, strip_tabs, origin_cmd, was_piped) per heredoc.
++    # origin_cmd captured at << parse time, NOT at body consumption time.
++    pending_heredocs: list[tuple[str, bool, str, bool]] = []
+     arithmetic_depth = 0  # tracks (( ... )) nesting for arithmetic context
+     param_expansion_depth = 0  # tracks ${ ... } nesting
+     bracket_depth = 0  # tracks [[ ... ]] nesting
+     brace_group_depth = 0  # tracks { ...; } brace groups
+     extglob_depth = 0  # tracks extglob ?() *() +() @() !() nesting
++    # Redaction state
++    body_ranges: list[tuple[int, int, bool]] = []  # (start, end, is_safe)
++    piped_since_heredoc = False  # Track if pipe occurred after << detection
+ 
+     while i < len(command):
+         c = command[i]
+@@ -358,6 +507,9 @@ def split_commands(command: str) -> list[str]:
+             # | (single pipe, not ||)
+             if c == "|":
+                 sub_commands.append("".join(current).strip())
++                # F1-1: Track that pending heredocs crossed a pipe boundary
++                if pending_heredocs:
++                    piped_since_heredoc = True
+                 current = []
+                 i += 1
+                 continue
+@@ -447,12 +599,41 @@ def _parse_heredoc_delimiter(command: str, i: int) -> tuple[str, str, int]:
+       - Bare word: EOF, EOFZ, END_MARKER
+       - Single-quoted: 'EOF' (literal heredoc, no expansion)
+       - Double-quoted: "EOF" (expansion-active heredoc)
++      - ANSI-C quoted: $'EOF' (strip $ prefix, then strip quotes)
++      - Locale translation: $"EOF" (strip $ prefix, then strip quotes)
++      - Backslash-escaped: \\EOF (strip backslashes from bare word)
+ 
+     Returns: (delimiter_text, raw_token, new_position)
+     """
+     if i >= len(command):
+         return ('', '', i)
+ 
++    # ANSI-C quoting ($'...') or locale translation ($"...")
++    # Must be checked BEFORE the single/double quote branch
++    if (command[i] == '$' and i + 1 < len(command)
++            and command[i + 1] in ("'", '"')):
++        quote_char = command[i + 1]
++        start = i
++        i += 2  # skip $' or $"
++        while i < len(command) and command[i] != quote_char:
++            if command[i] == '\\' and i + 1 < len(command):
++                i += 2  # skip escaped chars inside $'...'
++            else:
++                i += 1
++        if i < len(command):
++            i += 1  # consume closing quote
++        raw_token = command[start:i]
++        if quote_char == "'" and len(raw_token) >= 3:
++            # Decode ANSI-C escape sequences (\x45 → E, \n → newline, etc.)
++            # using the existing decoder to match bash behavior
++            delim = _decode_ansi_c_strings(raw_token)
++        elif len(raw_token) >= 3:
++            # $"..." locale translation: strip prefix/quotes
++            delim = raw_token[2:-1]
++        else:
++            delim = ''
++        return (delim, raw_token, i)
++
+     if command[i] in ("'", '"'):
+         quote_char = command[i]
+         start = i
+@@ -466,11 +647,29 @@ def _parse_heredoc_delimiter(command: str, i: int) -> tuple[str, str, int]:
+         return (delim, raw_token, i)
+ 
+     # Bare word: consume until whitespace, newline, or shell metachar
++    # Handle backslash-newline (line continuation) within the token
+     start = i
+     while i < len(command) and command[i] not in ' \t\n;|&<>()':
++        if (command[i] == '\\' and i + 1 < len(command)
++                and command[i + 1] == '\n'):
++            # Backslash-newline: line continuation, skip both and continue
++            i += 2
++            continue
+         i += 1
+     raw_token = command[start:i]
+-    return (raw_token, raw_token, i)
++    # Process backslash escapes in bare-word delimiters (bash behavior:
++    # \E -> E, \\ -> \, so \EOF -> EOF, \\EOF -> \EOF)
++    delim_chars = []
++    j = 0
++    while j < len(raw_token):
++        if raw_token[j] == '\\' and j + 1 < len(raw_token):
++            delim_chars.append(raw_token[j + 1])
++            j += 2
++        else:
++            delim_chars.append(raw_token[j])
++            j += 1
++    delim = ''.join(delim_chars)
++    return (delim, raw_token, i)
+ 
+ 
+ def _consume_heredoc_bodies(command: str, i: int,

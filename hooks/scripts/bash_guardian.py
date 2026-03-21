@@ -75,11 +75,209 @@ except ImportError as e:
 
 
 # ============================================================
-# Layer 2: Command Decomposition
+# Layer 2: Command Decomposition + Heredoc Redaction
 # ============================================================
 
+# Passive data sinks: commands that process data, never execute it.
+# Heredoc bodies feeding these commands are safe to redact.
+# V1 fix (F1-2): tee REMOVED — writes to files without > operator.
+# sort excluded — has -o output flag.
+_PASSIVE_DATA_SINKS = frozenset({
+    'cat',
+    'grep', 'egrep', 'fgrep', 'head', 'tail', 'wc', 'uniq',
+    'cut', 'tr', 'fold', 'fmt', 'column', 'paste', 'join', 'comm',
+    'echo', 'printf',
+    'jq', 'yq',
+    'diff', 'cmp', 'md5sum', 'sha256sum', 'sha1sum',
+})
 
-def split_commands(command: str) -> list[str]:
+# Interpreter commands: ALWAYS unsafe for heredoc redaction.
+_INTERPRETER_COMMANDS = frozenset({
+    'bash', 'sh', 'zsh', 'dash', 'ksh', 'csh', 'tcsh', 'fish',
+    'python', 'python2', 'python3', 'py',
+    'node', 'deno', 'bun',
+    'perl', 'ruby',
+    'source', '.', 'eval', 'exec',
+})
+
+# V1 fix: Versioned interpreter regex for commands like python3.10, python3.12.
+# Exact frozenset match misses these; AI agents commonly use pyenv/system versions.
+# V2 fix: Allow hyphenated versions (bash-5.0), letter suffixes (python3.8m),
+# and broader version patterns. Requires digit or hyphen after base name to avoid
+# matching unrelated tools (e.g., 'shred', 'perldoc').
+_VERSIONED_INTERPRETER_RE = re.compile(
+    r'^(?:python[23]?|ruby|perl|bash|sh|zsh|dash|ksh)(?:[-\d][\w.-]*)$'
+)
+
+# Output redirection operators that make a heredoc UNSAFE (body written to file).
+# V1 fix (F1-3): >&file added with negative lookahead for fd duplication (>&2).
+# V2 fix: Only exempt >&0, >&1, >&2, >&- (standard fds + close). Treat >&3+
+# as output redirect since those fds may point to files opened by prior commands.
+_OUTPUT_REDIR_PATTERN = re.compile(
+    r'(?:'
+    r'[0-9]*>{1,2}'        # >, >>, 2>, 2>>, n>, n>>
+    r'|[0-9]*>\|'          # >| (clobber), n>|
+    r'|&>'                  # &> (redirect both stdout+stderr)
+    r'|[0-9]*>&(?!\s*(?:[012]|-)(?:[\s;&|)]|$))'  # >&file (only exempt >&0/1/2/-)
+    r')'
+    r'\s*[^\s&|;)>]'       # followed by a target (not another operator)
+)
+
+
+def _extract_base_command(cmd_text: str) -> str:
+    """Extract the base command name from a command string.
+
+    Handles env prefixes, variable assignments, sudo, absolute paths,
+    and I/O redirect tokens before the command.
+
+    V2 fix: skips I/O redirect tokens (< file, > file) before the command.
+
+    Args:
+        cmd_text: Command text (may include flags, args, etc.)
+
+    Returns:
+        Base command name (lowercase), or empty string if unparseable.
+    """
+    cmd_text = cmd_text.strip()
+    if not cmd_text:
+        return ''
+
+    try:
+        parts = shlex.split(cmd_text)
+    except ValueError:
+        return ''
+
+    skip_prefixes = {'env', 'command', 'builtin', 'sudo', 'nice',
+                     'nohup', 'time', 'strace'}
+    i = 0
+    while i < len(parts):
+        part = parts[i]
+
+        # Skip I/O redirect tokens: <, >, >>, <<, and their targets
+        if part in ('<', '>', '>>', '<<', '>&', '&>', '>|'):
+            i += 2  # skip operator + target
+            continue
+        # Handle combined redirect+target (e.g., <file, >file)
+        if len(part) >= 2 and part[0] in '<>' and part[1] not in '<>':
+            i += 1
+            continue
+
+        # Variable assignment: contains = before any /
+        if '=' in part and '/' not in part.split('=')[0]:
+            i += 1
+            continue
+
+        # Known prefix commands (skip, move to next)
+        base = Path(part).name if '/' in part else part
+        if base.lower() in skip_prefixes:
+            i += 1
+            if base.lower() == 'sudo':
+                # V2 fix: no-arg allowlist (fail-closed for unknown flags).
+                # Unknown flags assumed to take an argument → fail-closed
+                # (returns '' → Rule 5 UNSAFE).
+                _sudo_noarg_flags = {
+                    '-A', '-b', '-E', '-e', '-H', '-h', '-i',
+                    '-K', '-k', '-l', '-n', '-P', '-S', '-s', '-V', '-v',
+                }
+                while i < len(parts) and parts[i].startswith('-'):
+                    flag = parts[i]
+                    i += 1
+                    if flag == '--':
+                        break  # -- terminates sudo flags
+                    if flag not in _sudo_noarg_flags and '=' not in flag and i < len(parts):
+                        i += 1  # arg-taking or unknown flag: skip argument
+                    # V2 Phase 3 fix: --flag=value (GNU-style inline argument)
+                    # already contains its argument, so do NOT skip next token
+            continue
+
+        # This is the actual command
+        base = Path(part).name if '/' in part else part
+        return base.lower()
+
+    return ''
+
+
+def _classify_heredoc_safety(
+    cmd_before_heredoc: str, was_piped: bool, full_segment: str = ''
+) -> bool:
+    """Classify whether a heredoc body is safe to redact.
+
+    Uses a 5-rule hybrid classifier:
+      1. Interpreter command -> UNSAFE (retain body)
+      2. Output redirection present -> UNSAFE (retain body)
+      3. Pipeline member (heredoc crossed a pipe) -> UNSAFE (retain body)
+      4. Passive data sink -> SAFE (redact body)
+      5. Unknown command -> UNSAFE (fail-closed, retain body)
+
+    Args:
+        cmd_before_heredoc: The command text preceding the << operator.
+        was_piped: Whether the heredoc crossed a pipe boundary.
+        full_segment: The full sub-command text containing the <<, including
+            text after << (e.g., redirects). V1 fix: redirect check uses this
+            to catch post-<< redirects like `cat << EOF > script.sh`.
+
+    Returns:
+        True if the heredoc body is safe to redact, False otherwise.
+    """
+    # Rule 3: Pipeline membership (checked first because it's a flag, not text)
+    if was_piped:
+        return False
+
+    base_cmd = _extract_base_command(cmd_before_heredoc)
+
+    # Rule 1: Interpreter commands are always unsafe
+    if base_cmd in _INTERPRETER_COMMANDS:
+        return False
+
+    # Rule 2: Output redirection makes the heredoc unsafe
+    # V1 fix: check full segment (includes post-<< redirects like > file)
+    check_text = full_segment or cmd_before_heredoc
+    if _OUTPUT_REDIR_PATTERN.search(check_text):
+        return False
+
+    # Rule 4: Passive data sinks are safe
+    if base_cmd in _PASSIVE_DATA_SINKS:
+        return True
+
+    # Rule 5: Unknown commands fail-closed
+    return False
+
+
+def _is_interpreter_heredoc(sub_cmd: str) -> bool:
+    """Check if a sub-command is an interpreter with a heredoc operator.
+
+    Defense-in-depth backstop: even with Phase 1 heredoc body retention,
+    block patterns using [^|&\\n]* cannot match across newline boundaries
+    in retained bodies. This detects the pattern and escalates to ASK.
+
+    Uses _extract_base_command() for robust interpreter detection, handling:
+    - env/sudo/nohup/nice prefixes
+    - Absolute paths (/usr/bin/bash)
+    - Variable assignments (FOO=bar bash << EOF)
+    - I/O redirect tokens before the command
+
+    Args:
+        sub_cmd: A single sub-command string from split_commands().
+
+    Returns:
+        True if the sub-command is an interpreter with heredoc.
+    """
+    if '<<' not in sub_cmd:
+        return False
+
+    # Extract command portion before the heredoc operator
+    cmd_before = sub_cmd.split('<<', 1)[0]
+    base_cmd = _extract_base_command(cmd_before)
+    if base_cmd in _INTERPRETER_COMMANDS:
+        return True
+    # V1 fix: Handle versioned interpreters (e.g., python3.10, python3.12)
+    if base_cmd and _VERSIONED_INTERPRETER_RE.match(base_cmd):
+        return True
+    return False
+
+
+def split_commands(command: str, redact_safe_heredocs: bool = False
+                   ) -> 'list[str] | tuple[list[str], str]':
     """Split compound command into sub-commands.
 
     Handles delimiters: ;  &&  ||  |  &  newline
@@ -98,15 +296,24 @@ def split_commands(command: str) -> list[str]:
     - Extglob patterns (?(...), *(...), +(...), @(...), !(...))
     - Arithmetic expressions ((( ... )))
 
+    When redact_safe_heredocs=True, also produces a redacted version of
+    the command with safe heredoc bodies replaced by empty lines. Safe
+    means the heredoc feeds a passive data sink (cat, grep, etc.) with
+    no output redirection and no pipeline. Unsafe bodies (interpreters,
+    write-to-file, piped, unknown) are retained.
+
     Critical fixes incorporated:
     - C-2: Backslash escapes and backtick substitution handling
     - M-4: Single & as command separator
+    - F1-1: Heredoc origin tracking at << parse time
 
     Args:
         command: The compound bash command to split.
+        redact_safe_heredocs: If True, return (sub_commands, redacted_command).
 
     Returns:
-        List of individual sub-commands (stripped of whitespace).
+        If redact_safe_heredocs is False: list of sub-command strings.
+        If redact_safe_heredocs is True: tuple of (sub_commands, redacted_command).
     """
     sub_commands: list[str] = []
     current: list[str] = []
@@ -116,6 +323,12 @@ def split_commands(command: str) -> list[str]:
     in_backtick = False
     i = 0
     pending_heredocs: list[tuple[str, bool]] = []  # (delimiter, strip_tabs)
+    # Redaction support (F1-1): track heredoc origins and body ranges
+    all_body_ranges: list[tuple[int, int, bool]] = []  # (start, end, is_safe)
+    # (origin_cmd, was_piped, full_segment, is_quoted)
+    # full_segment: full sub-command text (filled at separator/newline time)
+    # is_quoted: delimiter was quoted (suppresses expansion in bash)
+    heredoc_origins: list[tuple[str, bool, 'str | None', bool]] = []
     arithmetic_depth = 0  # tracks (( ... )) nesting for arithmetic context
     param_expansion_depth = 0  # tracks ${ ... } nesting
     bracket_depth = 0  # tracks [[ ... ]] nesting
@@ -340,24 +553,50 @@ def split_commands(command: str) -> list[str]:
             # Semicolon
             if c == ";":
                 sub_commands.append("".join(current).strip())
+                # V1 fix: finalize full_segment for pending heredoc origins
+                if redact_safe_heredocs and heredoc_origins:
+                    _seg = sub_commands[-1]
+                    heredoc_origins = [
+                        (c_, p, _seg if s is None else s, q)
+                        for c_, p, s, q in heredoc_origins
+                    ]
                 current = []
                 i += 1
                 continue
             # && (two ampersands)
             if c == "&" and i + 1 < len(command) and command[i + 1] == "&":
                 sub_commands.append("".join(current).strip())
+                if redact_safe_heredocs and heredoc_origins:
+                    _seg = sub_commands[-1]
+                    heredoc_origins = [
+                        (c_, p, _seg if s is None else s, q)
+                        for c_, p, s, q in heredoc_origins
+                    ]
                 current = []
                 i += 2
                 continue
             # || (two pipes)
             if c == "|" and i + 1 < len(command) and command[i + 1] == "|":
                 sub_commands.append("".join(current).strip())
+                if redact_safe_heredocs and heredoc_origins:
+                    _seg = sub_commands[-1]
+                    heredoc_origins = [
+                        (c_, p, _seg if s is None else s, q)
+                        for c_, p, s, q in heredoc_origins
+                    ]
                 current = []
                 i += 2
                 continue
             # | (single pipe, not ||)
             if c == "|":
                 sub_commands.append("".join(current).strip())
+                # F1-1: Mark pending heredocs as piped + finalize full_segment
+                if pending_heredocs and redact_safe_heredocs:
+                    _seg = sub_commands[-1]
+                    heredoc_origins = [
+                        (c_, True, _seg if s is None else s, q)
+                        for c_, p, s, q in heredoc_origins
+                    ]
                 current = []
                 i += 1
                 continue
@@ -382,6 +621,12 @@ def split_commands(command: str) -> list[str]:
                     i += 1
                     continue
                 sub_commands.append("".join(current).strip())
+                if redact_safe_heredocs and heredoc_origins:
+                    _seg = sub_commands[-1]
+                    heredoc_origins = [
+                        (c_, p, _seg if s is None else s, q)
+                        for c_, p, s, q in heredoc_origins
+                    ]
                 current = []
                 i += 1
                 continue
@@ -401,6 +646,11 @@ def split_commands(command: str) -> list[str]:
                     and command[i:i+3] != '<<<'
                     and arithmetic_depth == 0):
 
+                # F1-1: Capture origin command BEFORE appending <<
+                # This origin persists across all separator splits
+                if redact_safe_heredocs:
+                    origin_cmd = "".join(current).strip()
+
                 strip_tabs = command[i:i+3] == '<<-'
                 op_len = 3 if strip_tabs else 2
                 current.append(command[i:i+op_len])
@@ -415,6 +665,11 @@ def split_commands(command: str) -> list[str]:
                 delim, raw_token, i = _parse_heredoc_delimiter(command, i)
                 current.append(raw_token)
                 pending_heredocs.append((delim, strip_tabs))
+                if redact_safe_heredocs:
+                    # V1 fix: track is_quoted (any quoting suppresses expansion)
+                    # and full_segment (filled in at separator/newline time)
+                    is_quoted = raw_token != delim
+                    heredoc_origins.append((origin_cmd, False, None, is_quoted))
                 continue
 
             # Newline
@@ -424,7 +679,23 @@ def split_commands(command: str) -> list[str]:
                 i += 1
                 # Consume heredoc bodies after newline
                 if pending_heredocs:
-                    i = _consume_heredoc_bodies(command, i, pending_heredocs)
+                    if redact_safe_heredocs:
+                        # V1 fix: finalize full_segment for remaining origins
+                        if heredoc_origins:
+                            _seg = sub_commands[-1] if sub_commands else ""
+                            heredoc_origins = [
+                                (c_, p, _seg if s is None else s, q)
+                                for c_, p, s, q in heredoc_origins
+                            ]
+                        i, ranges = _consume_heredoc_bodies(
+                            command, i, pending_heredocs,
+                            classify=True,
+                            origins=heredoc_origins,
+                        )
+                        all_body_ranges.extend(ranges)
+                        heredoc_origins = []
+                    else:
+                        i = _consume_heredoc_bodies(command, i, pending_heredocs)
                     pending_heredocs = []
                 continue
 
@@ -437,7 +708,35 @@ def split_commands(command: str) -> list[str]:
         sub_commands.append(remaining)
 
     # Filter empty strings
-    return [cmd for cmd in sub_commands if cmd]
+    result = [cmd for cmd in sub_commands if cmd]
+
+    if redact_safe_heredocs:
+        try:
+            if all_body_ranges:
+                # Build redacted command: replace safe body content with
+                # empty lines (preserving newline count to prevent token
+                # merging and line alignment changes)
+                parts: list[str] = []
+                prev_end = 0
+                for start, end, is_safe in sorted(all_body_ranges):
+                    parts.append(command[prev_end:start])
+                    if is_safe:
+                        body_text = command[start:end]
+                        newline_count = body_text.count('\n')
+                        parts.append('\n' * newline_count)
+                    else:
+                        parts.append(command[start:end])
+                    prev_end = end
+                parts.append(command[prev_end:])
+                redacted = ''.join(parts)
+            else:
+                redacted = command
+        except Exception:
+            # Fail-closed: use original command (more content = more checks)
+            redacted = command
+        return result, redacted
+
+    return result
 
 
 def _parse_heredoc_delimiter(command: str, i: int) -> tuple[str, str, int]:
@@ -447,11 +746,40 @@ def _parse_heredoc_delimiter(command: str, i: int) -> tuple[str, str, int]:
       - Bare word: EOF, EOFZ, END_MARKER
       - Single-quoted: 'EOF' (literal heredoc, no expansion)
       - Double-quoted: "EOF" (expansion-active heredoc)
+      - ANSI-C quoted: $'EOF' (strip $ prefix, then strip quotes)
+      - Locale translation: $"EOF" (strip $ prefix, then strip quotes)
+      - Backslash-escaped: \\EOF (strip backslashes from bare word)
 
     Returns: (delimiter_text, raw_token, new_position)
     """
     if i >= len(command):
         return ('', '', i)
+
+    # ANSI-C quoting ($'...') or locale translation ($"...")
+    # Must be checked BEFORE the single/double quote branch
+    if (command[i] == '$' and i + 1 < len(command)
+            and command[i + 1] in ("'", '"')):
+        quote_char = command[i + 1]
+        start = i
+        i += 2  # skip $' or $"
+        while i < len(command) and command[i] != quote_char:
+            if command[i] == '\\' and i + 1 < len(command):
+                i += 2  # skip escaped chars inside $'...'
+            else:
+                i += 1
+        if i < len(command):
+            i += 1  # consume closing quote
+        raw_token = command[start:i]
+        if quote_char == "'" and len(raw_token) >= 3:
+            # Decode ANSI-C escape sequences (\x45 → E, \n → newline, etc.)
+            # using the existing decoder to match bash behavior
+            delim = _decode_ansi_c_strings(raw_token)
+        elif len(raw_token) >= 3:
+            # $"..." locale translation: strip prefix/quotes
+            delim = raw_token[2:-1]
+        else:
+            delim = ''
+        return (delim, raw_token, i)
 
     if command[i] in ("'", '"'):
         quote_char = command[i]
@@ -466,23 +794,61 @@ def _parse_heredoc_delimiter(command: str, i: int) -> tuple[str, str, int]:
         return (delim, raw_token, i)
 
     # Bare word: consume until whitespace, newline, or shell metachar
+    # Handle backslash-newline (line continuation) within the token
     start = i
     while i < len(command) and command[i] not in ' \t\n;|&<>()':
+        if (command[i] == '\\' and i + 1 < len(command)
+                and command[i + 1] == '\n'):
+            # Backslash-newline: line continuation, skip both and continue
+            i += 2
+            continue
         i += 1
     raw_token = command[start:i]
-    return (raw_token, raw_token, i)
+    # Process backslash escapes in bare-word delimiters (bash behavior:
+    # \E -> E, \\ -> \, so \EOF -> EOF, \\EOF -> \EOF)
+    delim_chars = []
+    j = 0
+    while j < len(raw_token):
+        if raw_token[j] == '\\' and j + 1 < len(raw_token):
+            delim_chars.append(raw_token[j + 1])
+            j += 2
+        else:
+            delim_chars.append(raw_token[j])
+            j += 1
+    delim = ''.join(delim_chars)
+    return (delim, raw_token, i)
 
 
-def _consume_heredoc_bodies(command: str, i: int,
-                             pending: list[tuple[str, bool]]) -> int:
+def _consume_heredoc_bodies(
+    command: str, i: int,
+    pending: 'list[tuple[str, bool]]',
+    classify: bool = False,
+    origins: 'list[tuple[str, bool, str | None, bool]] | None' = None,
+) -> 'int | tuple[int, list[tuple[int, int, bool]]]':
     """Consume heredoc body lines until each delimiter is matched.
 
     For each pending heredoc, reads lines until a line matches the
     delimiter exactly (after optional tab-stripping for <<-).
 
-    Returns: new position after all heredoc bodies consumed.
+    Args:
+        command: Full command string.
+        i: Current position (start of first body line).
+        pending: List of (delimiter, strip_tabs) tuples.
+        classify: If True, also return body ranges with safety classification.
+        origins: Parallel list of (origin_cmd, was_piped, full_segment, is_quoted)
+            for each pending heredoc. Required when classify=True.
+            F1-1: origin_cmd captured at << parse time.
+            V1 fix: full_segment includes post-<< text for redirect detection.
+            V1 fix: is_quoted flags whether bash expansion is suppressed.
+
+    Returns:
+        If classify is False: new position after all bodies consumed.
+        If classify is True: tuple of (new_position, body_ranges) where
+            body_ranges is list of (start, end, is_safe) tuples.
     """
-    for delim, strip_tabs in pending:
+    body_ranges: list[tuple[int, int, bool]] = []
+    for idx, (delim, strip_tabs) in enumerate(pending):
+        body_start = i
         while i < len(command):
             # Find end of current line
             line_start = i
@@ -499,10 +865,33 @@ def _consume_heredoc_bodies(command: str, i: int,
             if strip_tabs:
                 cmp_line = cmp_line.lstrip('\t')
             if cmp_line == delim:
+                # Body is [body_start, line_start) — excludes delimiter line
+                if classify and origins is not None:
+                    origin_cmd, was_piped, full_seg, is_quoted = (
+                        origins[idx] if idx < len(origins)
+                        else ('', False, '', True)
+                    )
+                    is_safe = _classify_heredoc_safety(
+                        origin_cmd, was_piped, full_seg or ''
+                    )
+                    # V1 fix: unquoted heredocs with expansion syntax → UNSAFE
+                    # Bash expands $(), ${}, backticks in unquoted heredoc bodies
+                    if is_safe and not is_quoted:
+                        body_text = command[body_start:line_start]
+                        if '$' in body_text or '`' in body_text:
+                            is_safe = False
+                    body_ranges.append((body_start, line_start, is_safe))
                 break
+        else:
+            # Unterminated heredoc: fail-closed, mark as UNSAFE
+            if classify:
+                body_ranges.append((body_start, i, False))
         # If we exhaust the input without finding the delimiter,
         # we've consumed an unterminated heredoc -- body lines
         # won't leak to sub-commands (fail-closed behavior)
+
+    if classify:
+        return i, body_ranges
     return i
 
 
@@ -893,6 +1282,138 @@ def extract_redirection_targets(command: str, project_dir: Path) -> list[Path]:
             continue
 
     return targets
+
+
+# Regex to extract single/double-quoted string literals from interpreter payloads.
+# Handles escaped characters within quotes.
+_QUOTED_LITERAL_RE = re.compile(
+    r"""(?:'([^'\\]*(?:\\.[^'\\]*)*)'|"([^"\\]*(?:\\.[^"\\]*)*)")"""
+)
+
+
+def extract_paths_from_interpreter_payload(
+    command: str, project_dir: Path
+) -> list[Path]:
+    """Extract file paths from interpreter -c/-e payload string literals.
+
+    Used by the F1 fail-closed block to attempt path resolution before
+    falling back to ASK. Only returns paths that are within the project
+    boundary (checked via Path.relative_to, NOT str.startswith).
+
+    Security invariants:
+    - F2-1: Uses is_within_project() (relative_to-based) for boundary check
+    - F2-2: Rejects literals containing {} or $ (interpolation markers)
+    - Fail-closed: returns [] on any error (F1 ASK fires)
+
+    Args:
+        command: The bash command string (e.g., 'python3 -c "os.remove(...)"').
+        project_dir: Project directory for resolving relative paths and
+            boundary checking.
+
+    Returns:
+        List of resolved Path objects within the project, or [] if none.
+    """
+    try:
+        from _guardian_utils import extract_interpreter_payload
+
+        payload = extract_interpreter_payload(command)
+        if payload is None:
+            return []
+
+        paths: list[Path] = []
+        saw_out_of_project = False  # V2 fix: fail-closed on mixed paths
+        for match in _QUOTED_LITERAL_RE.finditer(payload):
+            # Group 1 = single-quoted content, Group 2 = double-quoted content
+            literal = match.group(1) if match.group(1) is not None else match.group(2)
+            if literal is None:
+                continue
+
+            # F2-2: Reject interpolation markers — unresolvable templates
+            # V1 fix: Added % for C-style format strings (e.g., "%s/passwd" % var)
+            if '{' in literal or '}' in literal or '$' in literal or '%' in literal:
+                continue
+
+            # V1 fix: Reject literals containing backslash-escaped path chars.
+            # JS escape sequences (e.g., \/ → / at runtime) make the literal
+            # path diverge from the runtime path. Applies to all quote types
+            # because extract_interpreter_payload() strips outer shell quotes,
+            # so inner JS/Perl/Ruby single-quotes still have escape semantics.
+            if '\\' in literal:
+                continue
+
+            # Must look like a path: contains / or starts with .
+            if '/' not in literal and not literal.startswith('.'):
+                continue
+
+            # V1+V2 fix: Reject trivial literals that resolve to project root.
+            # ".", "./", "./.", etc. are too generic to be meaningful targets
+            # and can serve as decoys to suppress F1 ASK.
+            # Use resolved path comparison instead of string matching to catch
+            # all variants (V2 fix: "./.` bypassed the string check).
+            try:
+                _check = Path(literal)
+                if not _check.is_absolute():
+                    _check = project_dir / _check
+                if _check.resolve() == project_dir.resolve():
+                    continue
+            except (OSError, ValueError):
+                pass
+
+            # Skip URLs
+            if '://' in literal:
+                continue
+
+            # Skip MIME types: known type prefixes with single /
+            # V1 fix: Use prefix allowlist instead of fragile heuristic to
+            # avoid false negatives on extensionless paths like "src/utils"
+            _MIME_PREFIXES = (
+                'application/', 'text/', 'image/', 'audio/', 'video/',
+                'multipart/', 'font/', 'model/', 'message/',
+            )
+            if (literal.count('/') == 1
+                    and not literal.startswith('.')
+                    and not literal.startswith('/')
+                    and any(literal.lower().startswith(p) for p in _MIME_PREFIXES)):
+                continue
+
+            try:
+                path = Path(literal)
+                if not path.is_absolute():
+                    path = project_dir / path
+
+                # Check for glob patterns
+                if '*' in literal or '?' in literal or '[' in literal:
+                    # Expand glob, filter each result through project boundary.
+                    # Note: recursive=True is intentionally omitted — ** patterns
+                    # should NOT recursively expand to prevent DoS via massive expansion.
+                    expanded = glob.glob(str(path))
+                    for exp_str in expanded:
+                        exp_path = Path(exp_str)
+                        if is_within_project(exp_path, project_dir):
+                            paths.append(exp_path)
+                        else:
+                            saw_out_of_project = True
+                else:
+                    # F2-1 CRITICAL: Use is_within_project (relative_to-based)
+                    if is_within_project(path, project_dir):
+                        paths.append(path)
+                    else:
+                        # V2 fix: Track out-of-project paths for mixed-path
+                        # fail-closed behavior
+                        saw_out_of_project = True
+            except (OSError, ValueError):
+                continue
+
+        # V2 fix: If ANY path-like literal resolved outside the project,
+        # return empty to trigger F1 ASK. This prevents the "mixed paths"
+        # bypass where a benign in-project path alongside an out-of-project
+        # target silently drops the dangerous path and suppresses F1 ASK.
+        if saw_out_of_project:
+            return []
+        return paths
+    except Exception:
+        # Fail-closed: any error → return empty → F1 ASK fires
+        return []
 
 
 def extract_paths(
@@ -1379,15 +1900,16 @@ def _stronger_verdict(
 def main() -> None:
     """Main hook entry point.
 
-    Execution flow (C-1 fix: all layers complete before decision):
-    1. Layer 0: Block patterns (catastrophic) -- short-circuits on deny
-    2. Layer 0b: Ask patterns (dangerous-but-legitimate)
-    3. Layer 1: Protected path scan (raw string scan)
-    4. Layer 2+3+4: Command decomposition + per-sub-command analysis
-    5. Aggregate verdicts: deny > ask > allow
-    6. Handle deletions with archive
-    7. Pre-commit for dangerous operations
-    8. Emit final verdict
+    Execution flow (Phase 1: heredoc redaction integrated):
+    1. Layer 2: split_commands() with redaction — produces sub-commands + redacted string
+    2. Layer 0: Block patterns scan redacted command (safe heredoc bodies removed)
+    3. Layer 0b: Ask patterns scan redacted command
+    4. Layer 1: Protected path scan (joined sub-commands)
+    5. Layer 3+4: Per-sub-command path analysis (original sub-commands)
+    6. Aggregate verdicts: deny > ask > allow
+    7. Handle deletions with archive
+    8. Pre-commit for dangerous operations
+    9. Emit final verdict
     """
     # Get project directory
     project_dir_str = get_project_dir()
@@ -1419,8 +1941,15 @@ def main() -> None:
     # Load config once for all layers
     config = load_guardian_config()
 
+    # ========== Layer 2: Command Decomposition + Heredoc Redaction ==========
+    # Split FIRST to produce redacted command for Layer 0/0b.
+    # Single-pass: same parser produces both sub-commands and redacted string.
+    sub_commands, redacted_command = split_commands(
+        command, redact_safe_heredocs=True
+    )
+
     # ========== Layer 0: Block Patterns (short-circuit on catastrophic) ==========
-    blocked, reason = match_block_patterns(command)
+    blocked, reason = match_block_patterns(redacted_command)
     if blocked:
         log_guardian("BLOCK", f"{reason}: {cmd_preview}")
         if is_dry_run():
@@ -1433,13 +1962,10 @@ def main() -> None:
     # C-1 fix: ALL layers complete before any decision
     final_verdict: tuple[str, str] = ("allow", "")
 
-    # Layer 0b: Ask patterns
-    needs_ask, ask_reason = match_ask_patterns(command)
+    # Layer 0b: Ask patterns (uses redacted command — safe heredoc bodies removed)
+    needs_ask, ask_reason = match_ask_patterns(redacted_command)
     if needs_ask:
         final_verdict = _stronger_verdict(final_verdict, ("ask", ask_reason))
-
-    # ========== Layer 2: Command Decomposition (moved before Layer 1) ==========
-    sub_commands = split_commands(command)
 
     # ========== Layer 1: Protected Path Scan ==========
     # Scan joined sub-commands instead of raw command string.
@@ -1459,6 +1985,16 @@ def main() -> None:
     all_paths: list[Path] = []  # Collect all paths for archive step
 
     for sub_cmd in sub_commands:
+        # Phase 3: Interpreter+heredoc backstop (defense-in-depth)
+        # Block patterns can't match multiline retained heredoc bodies
+        # due to [^|&\n]* stopping at newlines. ASK for interpreter+heredoc.
+        if _is_interpreter_heredoc(sub_cmd):
+            final_verdict = _stronger_verdict(
+                final_verdict,
+                ("ask", f"Interpreter command with heredoc: "
+                 f"{truncate_command(sub_cmd)}")
+            )
+
         is_write = is_write_command(sub_cmd)
         is_delete = is_delete_command(sub_cmd)
 
@@ -1471,14 +2007,49 @@ def main() -> None:
         sub_paths = paths + redir_paths
         all_paths.extend(sub_paths)
 
-        # F1: Fail-closed safety net — if write/delete detected but no paths resolved,
-        # escalate to "ask" instead of silently allowing (fail-closed)
+        # F1: Fail-closed safety net — if write/delete detected but no paths
+        # resolved from shell-level arguments, attempt interpreter payload
+        # path extraction before falling back to ASK.
         if (is_write or is_delete) and not sub_paths:
             op_type = "delete" if is_delete else "write"
-            final_verdict = _stronger_verdict(
-                final_verdict,
-                ("ask", f"Detected {op_type} but could not resolve target paths"),
-            )
+
+            # Check if this is an interpreter command with extractable paths
+            from _guardian_utils import check_interpreter_payload
+            is_interp, interp_detail = check_interpreter_payload(sub_cmd)
+            if is_interp:
+                # Attempt to resolve paths from interpreter payload
+                interp_paths = extract_paths_from_interpreter_payload(
+                    sub_cmd, project_dir
+                )
+                if interp_paths:
+                    # Paths resolved: route through normal path validation
+                    sub_paths = interp_paths
+                    all_paths.extend(sub_paths)
+                    log_guardian(
+                        "DEBUG",
+                        f"F1: Resolved {len(interp_paths)} path(s) from "
+                        f"interpreter payload"
+                    )
+                    # Fall through to path validation loop below
+                else:
+                    # Paths not resolved: F1 ASK with enriched message
+                    api_name = (
+                        interp_detail.rsplit(": ", 1)[-1]
+                        if ": " in interp_detail
+                        else ""
+                    )
+                    api_info = f" via {api_name}" if api_name else ""
+                    final_verdict = _stronger_verdict(
+                        final_verdict,
+                        ("ask", f"Detected {op_type}{api_info} but could not "
+                         f"resolve target paths"),
+                    )
+            else:
+                # Not an interpreter command: standard F1 ASK
+                final_verdict = _stronger_verdict(
+                    final_verdict,
+                    ("ask", f"Detected {op_type} but could not resolve target paths"),
+                )
 
         for path in sub_paths:
             path_str = str(path)
