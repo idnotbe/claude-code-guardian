@@ -1917,6 +1917,236 @@ def git_add_tracked(max_retries: int = 3) -> bool:
     return False
 
 
+def git_add_filtered(include_untracked: bool = False) -> bool:
+    """Stage files for commit, filtering out zeroAccessPaths.
+
+    Unlike git_add_all() / git_add_tracked(), this function:
+    1. Gets the list of files that would be staged
+    2. Filters out any matching zeroAccessPaths
+    3. Stages only the safe files
+    4. ALWAYS checks already-staged files and unstages any matches
+
+    Step 4 (unstaging secrets) runs unconditionally, even if Step 3 fails.
+    If secrets are detected but cannot be unstaged, returns False so the
+    caller can abort the commit.
+
+    This is the secure alternative for auto-commit staging. It prevents
+    secrets (e.g. .env, *.pem, *.key) from being committed to git history.
+
+    Uses -z flag for git output to handle filenames with spaces/quotes.
+
+    Args:
+        include_untracked: If True, also stage untracked files.
+
+    Returns:
+        True if staging succeeded (even if some files were filtered).
+        False if git command failed or if staged secrets could not be unstaged.
+    """
+    if not is_git_available():
+        log_guardian("WARN", "Git not available - cannot stage changes")
+        return False
+
+    project_dir = get_project_dir()
+    if not project_dir:
+        return False
+
+    staging_ok = True
+
+    # Step 1: Get list of tracked modified files (using -z for safe parsing)
+    files_to_stage = []
+    try:
+        result = subprocess.run(
+            ["git", "diff", "-z", "--name-only"],
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=project_dir,
+            env=_get_git_env(),
+            timeout=10,
+        )
+        if result.returncode == 0 and result.stdout:
+            # -z output: null-separated, may have trailing null
+            files_to_stage.extend(
+                f for f in result.stdout.split("\0") if f
+            )
+    except Exception as e:
+        log_guardian("WARN", f"Failed to list tracked modified files: {e}")
+        staging_ok = False
+
+    # Step 2: If include_untracked, also get untracked files (using -z)
+    if include_untracked and staging_ok:
+        try:
+            result = subprocess.run(
+                ["git", "ls-files", "-z", "--others", "--exclude-standard"],
+                capture_output=True,
+                encoding="utf-8",
+                errors="replace",
+                cwd=project_dir,
+                env=_get_git_env(),
+                timeout=10,
+            )
+            if result.returncode == 0 and result.stdout:
+                files_to_stage.extend(
+                    f for f in result.stdout.split("\0") if f
+                )
+        except Exception as e:
+            log_guardian("WARN", f"Failed to list untracked files: {e}")
+            staging_ok = False
+
+    # Step 3: Filter and stage safe files
+    if staging_ok and files_to_stage:
+        safe_files = []
+        filtered_files = []
+        for rel_path in files_to_stage:
+            if not rel_path:
+                continue
+            # Build absolute path for match_zero_access
+            abs_path = os.path.join(project_dir, rel_path)
+            if match_zero_access(abs_path):
+                filtered_files.append(rel_path)
+            else:
+                safe_files.append(rel_path)
+
+        # Log filtered files as warnings
+        if filtered_files:
+            log_guardian(
+                "WARN",
+                f"Filtered {len(filtered_files)} secret file(s) from auto-commit: "
+                f"{', '.join(filtered_files[:10])}"
+                + (f" (and {len(filtered_files) - 10} more)" if len(filtered_files) > 10 else ""),
+            )
+
+        # Stage only safe files (chunked to avoid ARG_MAX)
+        if safe_files:
+            _CHUNK_SIZE = 500
+            for i in range(0, len(safe_files), _CHUNK_SIZE):
+                chunk = safe_files[i : i + _CHUNK_SIZE]
+                try:
+                    result = subprocess.run(
+                        ["git", "add", "--"] + chunk,
+                        capture_output=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        cwd=project_dir,
+                        env=_get_git_env(),
+                        timeout=30,
+                    )
+                    if result.returncode != 0:
+                        log_guardian("WARN", f"git add failed: {(result.stderr or '')[:500]}")
+                        staging_ok = False
+                        break
+                except Exception as e:
+                    log_guardian("WARN", f"Error staging safe files: {e}")
+                    staging_ok = False
+                    break
+        else:
+            log_guardian("INFO", "No safe files to stage (all filtered or no changes)")
+    elif staging_ok:
+        log_guardian("INFO", "No safe files to stage (all filtered or no changes)")
+
+    # Step 4: ALWAYS check already-staged files and unstage any zeroAccessPaths matches.
+    # This runs even if Step 3 failed, to catch pre-staged secrets.
+    unstage_ok = _unstage_secret_files(project_dir)
+
+    # Return False if either staging failed or secrets couldn't be unstaged
+    return staging_ok and unstage_ok
+
+
+def _unstage_secret_files(project_dir: str) -> bool:
+    """Check staged files and unstage any matching zeroAccessPaths.
+
+    Uses -z flag for safe filename parsing.
+
+    Args:
+        project_dir: The git repository root directory.
+
+    Returns:
+        True if no secrets are staged (or all were successfully unstaged).
+        False if secrets were detected but could not be unstaged.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "diff", "-z", "--cached", "--name-only"],
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=project_dir,
+            env=_get_git_env(),
+            timeout=10,
+        )
+        if result.returncode != 0 or not result.stdout:
+            return True  # No staged files or git error (no secrets to worry about)
+
+        staged_files = [f for f in result.stdout.split("\0") if f]
+        staged_secrets = []
+        for rel_path in staged_files:
+            abs_path = os.path.join(project_dir, rel_path)
+            if match_zero_access(abs_path):
+                staged_secrets.append(rel_path)
+
+        if not staged_secrets:
+            return True  # No secrets staged
+
+        log_guardian(
+            "WARN",
+            f"Unstaging {len(staged_secrets)} pre-staged secret file(s): "
+            f"{', '.join(staged_secrets[:10])}"
+            + (f" (and {len(staged_secrets) - 10} more)" if len(staged_secrets) > 10 else ""),
+        )
+
+        # Unstage secret files (chunked to avoid ARG_MAX)
+        _CHUNK_SIZE = 500
+        for i in range(0, len(staged_secrets), _CHUNK_SIZE):
+            chunk = staged_secrets[i : i + _CHUNK_SIZE]
+            try:
+                result = subprocess.run(
+                    ["git", "reset", "HEAD", "--"] + chunk,
+                    capture_output=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    cwd=project_dir,
+                    env=_get_git_env(),
+                    timeout=10,
+                )
+                if result.returncode != 0:
+                    log_guardian("WARN", f"git reset HEAD failed: {(result.stderr or '')[:500]}")
+                    # Fall back to full reset to prevent secret commit
+                    log_guardian("WARN", "Falling back to full git reset to protect secrets")
+                    try:
+                        subprocess.run(
+                            ["git", "reset", "HEAD"],
+                            capture_output=True,
+                            cwd=project_dir,
+                            env=_get_git_env(),
+                            timeout=10,
+                        )
+                    except Exception:
+                        pass
+                    return False
+            except Exception as e:
+                log_guardian("WARN", f"Error unstaging secrets: {e}")
+                # Fall back to full reset to prevent secret commit
+                log_guardian("WARN", "Falling back to full git reset to protect secrets")
+                try:
+                    subprocess.run(
+                        ["git", "reset", "HEAD"],
+                        capture_output=True,
+                        cwd=project_dir,
+                        env=_get_git_env(),
+                        timeout=10,
+                    )
+                except Exception:
+                    pass
+                return False
+
+        return True
+
+    except Exception as e:
+        log_guardian("WARN", f"Failed to check staged files: {e}")
+        # Cannot verify no secrets are staged -- return False to abort commit
+        return False
+
+
 def ensure_git_config() -> bool:
     """Ensure git user.email and user.name are configured.
 
@@ -2430,6 +2660,15 @@ def run_path_guardian_hook(tool_name: str) -> None:
         print(_json.dumps(deny_response("Invalid hook input (malformed JSON)")))
         sys.exit(0)
 
+    # Phase 2 fix: Validate input_data is a dict before calling .get()
+    # Non-dict JSON ([], "str", 123, null, true/false) would raise
+    # AttributeError on .get(), which previously fell through to the
+    # wrapper's onError handler -- with onError=allow, this was a bypass.
+    if not isinstance(input_data, dict):
+        log_guardian("WARN", f"Invalid input type: {type(input_data).__name__} (expected dict)")
+        print(_json.dumps(deny_response("Invalid hook input (expected JSON object)")))
+        sys.exit(0)
+
     # Only process specified tool (case-insensitive)
     actual_tool = input_data.get("tool_name", "")
     if not isinstance(actual_tool, str) or actual_tool.lower() != tool_name.lower():
@@ -2446,12 +2685,11 @@ def run_path_guardian_hook(tool_name: str) -> None:
     # Extract file path
     file_path = tool_input.get("file_path", "")
 
-    # Validate file_path
+    # Phase 3 fix: Empty/missing file_path now returns deny for ALL tools
+    # Previously this returned allow, bypassing all path-based security checks.
     if not file_path:
-        log_guardian("WARN", f"{tool_name} called without file_path")
-        # Allow - some tools might legitimately have no path
-        # Note: No response = allow in Claude Code hook protocol
-        print(_json.dumps(allow_response()))
+        log_guardian("WARN", f"{tool_name} called without file_path — denied")
+        print(_json.dumps(deny_response("Empty or missing file path")))
         sys.exit(0)
 
     if not isinstance(file_path, str):

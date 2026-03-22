@@ -33,22 +33,23 @@ Hooks into Bash, Edit, Read, Write (PreToolUse) and Stop (auto-commit) events.
 
 ### Known Security Gaps (Priority Order)
 
-These are the most critical untested paths. See `action-plans/test-plan.md` for the full action plan.
+Items 1-3 were **fixed** on 2026-03-22. See `action-plans/_done/security-fixes.md`.
 
-1. **Auto-commit `--no-verify`**: `auto_commit.py:146` unconditionally bypasses pre-commit hooks. Combined with `includeUntracked=true`, can commit secrets.
-2. **Limited test coverage**: `auto_commit.py` has no tests. `edit_guardian.py`, `read_guardian.py`, `write_guardian.py` are thin wrappers with basic subprocess integration tests in `tests/security/test_p0p1_failclosed.py`.
-3. **Normalization helpers fail-open**: `expand_path()`, `normalize_path()`, and `normalize_path_for_matching()` return unresolved paths on exception. Defense-in-depth via independent checks mitigates risk, but a hardening pass should make these fail-closed.
+1. ~~**Auto-commit secrets staging**~~ **FIXED**: `git_add_filtered()` filters files against `zeroAccessPaths` before staging. `_unstage_secret_files()` catches pre-staged secrets. Tests: `test_auto_commit.py`.
+2. ~~**Non-dict JSON bypass**~~ **FIXED**: `isinstance(input_data, dict)` check in `run_path_guardian_hook()` denies non-dict JSON before it reaches wrapper `onError`. Tests: `test_failopen_edgecases.py::TestProtocolHole_MalformedValidJSON`.
+3. ~~**Missing file_path bypass**~~ **FIXED**: Empty/missing `file_path` now returns deny for ALL tools. Tests: `test_failopen_edgecases.py::TestMissingFilePath_WriteEdit`.
+4. **Normalization helpers fail-open**: `expand_path()`, `normalize_path()`, `normalize_path_for_matching()` return unresolved paths on exception. Defense-in-depth via independent checks mitigates risk.
 
 ### Coverage Gaps by Script
 
 | Script | LOC | Test Coverage |
 |--------|-----|---------------|
 | `bash_guardian.py` | 1,289 | Extensive (core + security + regression + usability suites) |
-| `_guardian_utils.py` | 2,426 | Partial (functions tested via bash_guardian; path guardian paths covered by subprocess integration tests) |
-| `edit_guardian.py` | 86 | Basic (subprocess integration in `tests/security/test_p0p1_failclosed.py`) |
-| `read_guardian.py` | 82 | Basic (subprocess integration in `tests/security/test_p0p1_failclosed.py`) |
-| `write_guardian.py` | 86 | Basic (subprocess integration in `tests/security/test_p0p1_failclosed.py`) |
-| `auto_commit.py` | 173 | None |
+| `_guardian_utils.py` | 2,426 | Substantial (fail-closed helpers, run_path_guardian_hook E2E, protocol holes, dry-run, hardlink alias) |
+| `edit_guardian.py` | 86 | Substantial (smoke, protocol E2E, fail-closed, dry-run, wrapper fallback, hardlink alias) |
+| `read_guardian.py` | 82 | Substantial (smoke, protocol E2E, fail-closed, dry-run, wrapper fallback) |
+| `write_guardian.py` | 86 | Substantial (smoke, protocol E2E, fail-closed, dry-run, wrapper fallback, hardlink alias) |
+| `auto_commit.py` | 173 | Substantial (43 tests: security characterization, circuit breaker, git edge cases, config) |
 | `session_start.sh` | 76 | Full (28 tests in `tests/regression/test_session_start.py`) |
 
 ## Action Plans

@@ -1,0 +1,24 @@
+[project]
+name = "claude-code-guardian"
+version = "1.0.0"
+description = "Security guardrails plugin for Claude Code's --dangerously-skip-permissions mode"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+markers = [
+    "slow: marks tests as slow (e.g., ReDoS timing tests)",
+    "security: marks security-critical tests",
+]
+norecursedirs = ["_archive", "patterns", "__pycache__", ".git"]
+
+[tool.coverage.run]
+source = ["hooks/scripts"]
+omit = ["tests/*", "*/_archive/*"]
+
+[tool.coverage.report]
+fail_under = 50
+show_missing = true

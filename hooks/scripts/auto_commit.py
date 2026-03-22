@@ -22,6 +22,7 @@ try:
         COMMIT_MESSAGE_MAX_LENGTH,  # P1-1 FIX: Import for message length limit
         clear_circuit,
         git_add_all,
+        git_add_filtered,  # SECURITY FIX: filtered staging for auto-commit
         git_add_tracked,
         git_commit,
         git_get_last_commit_hash,
@@ -99,27 +100,27 @@ def main():
         log_guardian("DRY-RUN", "Would auto-commit changes")
         return
 
-    # Stage changes
+    # Stage changes (with zeroAccessPaths filtering)
+    # SECURITY FIX: Use git_add_filtered() instead of git_add_all()/git_add_tracked()
+    # to prevent secrets (.env, *.pem, *.key, etc.) from being committed
     include_untracked = git_config.get("includeUntracked", False)
-    if include_untracked:
-        success = git_add_all()
-    else:
-        success = git_add_tracked()
+    success = git_add_filtered(include_untracked=include_untracked)
 
-    # MINOR-3 DOCUMENTATION: Stage Failure Handling Strategy
-    # auto_commit.py: Continues to commit even if staging fails (best-effort)
-    #   Reason: There may be already staged changes that should be preserved
-    # bash_guardian.py: Skips commit if staging fails
-    #   Reason: pre-commit should only include what we just staged
+    # SECURITY FIX: If git_add_filtered() returns False, it means either:
+    # (a) staging failed, or (b) secrets were detected but could NOT be unstaged.
+    # In case (b), we MUST NOT commit — doing so would commit secrets to history.
+    # git_add_filtered() already falls back to full `git reset HEAD` internally,
+    # so reaching here with False means the fallback also failed (locked index, etc.).
     if not success:
-        log_guardian("WARN", "Failed to stage changes, attempting commit anyway")
-        # Don't return - there may be already staged changes to commit
+        log_guardian("WARN", "Staging failed or secrets could not be unstaged — aborting commit")
+        set_circuit_open("auto-commit aborted: staging failure or unstaged secrets")
+        return
     else:
         # MAJOR-2 FIX: Log success only after confirming stage succeeded
         mode = (
-            "all changes (including untracked)"
+            "all changes (including untracked, filtered for secrets)"
             if include_untracked
-            else "tracked file changes only"
+            else "tracked file changes only (filtered for secrets)"
         )
         log_guardian("INFO", f"Staged {mode}")
 

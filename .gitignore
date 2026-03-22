@@ -24,5 +24,12 @@ Thumbs.db
 .env
 .env.*
 
+# Test / build artifacts
+.coverage
+temp/
+
+# Claude Code ephemeral state
+.claude/worktrees/
+
 # Windows reserved filename artifact
 nul
