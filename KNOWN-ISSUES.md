@@ -29,6 +29,7 @@ These 5 assumptions must be verified in a real Claude Code environment before pu
 - **Test**: Install plugin, say "show guardian config" -- should trigger skill
 
 ### PV-04: Marketplace Resolution
+- **Status**: RESOLVED (hub plan 0006 / ADR-007). The standalone `.claude-plugin/marketplace.json` was removed in favor of the `idnotbe/claude-plugins` hub; install via `/plugin marketplace add idnotbe/claude-plugins` then `/plugin install claude-code-guardian@idnotbe`.
 - **Assumption**: .claude-plugin/marketplace.json enables self-hosted marketplace installation
 - **Used in**: .claude-plugin/marketplace.json
 - **If wrong**: Users must use manual installation (git clone + --plugin-dir)
@@ -122,9 +123,10 @@ These 5 assumptions must be verified in a real Claude Code environment before pu
 - **Fix**: Added `getattr(e, 'winerror', None) == 112` check (v1.0.1)
 
 #### COMPAT-12: Hypothetical marketplace schema URL
+- **Status**: MOOT (hub plan 0006 / ADR-007). The standalone `.claude-plugin/marketplace.json` was removed; this compatibility concern no longer applies.
 - **File**: .claude-plugin/marketplace.json
 - **Issue**: The `$schema` field in marketplace.json references a hypothetical URL (`https://claude.ai/schemas/marketplace.json`) that does not resolve to an actual schema endpoint. This prevents IDE-based schema validation from working.
-- **Status**: Cosmetic only -- no runtime impact. The marketplace.json file is only used during plugin discovery and installation, not at runtime.
+- **Original assessment**: Cosmetic only -- no runtime impact. The marketplace.json file is only used during plugin discovery and installation, not at runtime.
 
 #### ~~COMPAT-13: Recovery guidance uses Windows del on all platforms~~ FIXED
 - **File**: hooks/scripts/_guardian_utils.py, circuit breaker recovery messages
@@ -140,7 +142,7 @@ These 5 assumptions must be verified in a real Claude Code environment before pu
 | F-01 | CRITICAL | bash_guardian.py failed open on unhandled crash, allowing commands through without checks | Round 1 |
 | F-02 | HIGH | Oversized command could bypass pattern matching via padding attack | Round 1 |
 | CRITICAL-01 | CRITICAL | README documented a configuration step that did not exist in the codebase | Round 1 |
-| HIGH-01 | HIGH | marketplace.json used wrong `$schema` key format | Round 1 |
+| HIGH-01 | HIGH | marketplace.json used wrong `$schema` key format -- file later removed (hub plan 0006 / ADR-007) | Round 1 |
 | MEDIUM-02 | MEDIUM | Korean-language comments left in committed production code | Round 1 |
 | MEDIUM-03 | MEDIUM | .gitignore referenced wrong log filename, leaving actual logs unignored | Round 1 |
 | COMPAT-01 | HIGH | plugin.json missing skills and agents declarations, preventing discovery | Round 2 |
