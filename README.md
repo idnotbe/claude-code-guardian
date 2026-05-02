@@ -106,15 +106,14 @@ To update, run `git pull` in the cloned directory.
 
 > **Unverified**: Marketplace integration is currently experimental and these commands have not been tested against a live Claude Code plugin CLI. Manual installation (above) is the reliable path.
 
-The following are two alternative syntaxes that may work depending on your Claude Code version:
+Guardian is published through the `idnotbe/claude-plugins` marketplace hub. Run these commands inside Claude Code:
 
-```bash
-# Alternative A: marketplace add
-/plugin marketplace add idnotbe/claude-code-guardian
-
-# Alternative B: direct install
-/plugin install claude-code-guardian@idnotbe-security
 ```
+/plugin marketplace add idnotbe/claude-plugins
+/plugin install claude-code-guardian@idnotbe
+```
+
+The first command registers the hub repo as a marketplace under the local name `idnotbe`. The second resolves `claude-code-guardian` against the hub catalog and pulls this repo as the upstream source. Restart your Claude Code session if the plugin does not appear immediately.
 
 See [UX-07 in KNOWN-ISSUES.md](KNOWN-ISSUES.md) for details.
 
